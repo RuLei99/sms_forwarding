@@ -71,59 +71,112 @@ bool checkAuth() {
   return true;
 }
 
+// ---- 模组串口互斥 ----
+// 长 AT 操作（Ping/重启/发短信等）等待期间会嵌套调用 server.handleClient()，
+// 若此时另一个请求也去读写 Serial1，双方响应会互相截断。
+// 所有会占用 Serial1 的处理器进入前必须 acquire，用完 release。
+static bool acquireModemPort(const char* who) {
+  if (modemPortBusy) {
+    logCaptureLn(String("模组串口忙，拒绝请求: ") + String(who));
+    server.send(429, "application/json", "{\"success\":false,\"message\":\"模组正忙，请稍后重试\"}");
+    return false;
+  }
+  modemPortBusy = true;
+  return true;
+}
+static void releaseModemPort() { modemPortBusy = false; }
+
+// ---- 页面流式渲染 ----
+// 直接遍历 flash 中的页面字面量，遇到 %KEY%（大写字母/下划线）查表替换，
+// 以 1KB 块下发。避免"整页拷入堆 + 逐个 replace 再整体复制"的内存开销
+// （52KB 页面峰值会占到 100KB+ 堆，挤压 WiFi/SSL/SMTP）。
+struct PageVar { const char* key; String value; };
+
+static void streamTemplatedPage(const char* page, const PageVar* vars, int nVars) {
+  char chunk[1024];
+  size_t len = 0;
+  auto flush = [&]() {
+    if (len > 0) {
+      server.sendContent(String(chunk, len));
+      len = 0;
+    }
+  };
+
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+
+  const char* p = page;
+  while (*p) {
+    if (*p == '%') {
+      const char* e = p + 1;
+      while (*e == '_' || (*e >= 'A' && *e <= 'Z')) e++;
+      size_t klen = e - p - 1;
+      bool matched = false;
+      if (klen >= 1 && klen <= 24 && *e == '%') {
+        char key[25];
+        memcpy(key, p + 1, klen);
+        key[klen] = 0;
+        for (int i = 0; i < nVars; i++) {
+          if (strcmp(vars[i].key, key) == 0) {
+            flush();
+            server.sendContent(vars[i].value);
+            p = e + 1;
+            matched = true;
+            break;
+          }
+        }
+      }
+      if (matched) continue;  // 已替换，处理下一字符
+    }
+    // 普通字符（含未命中的 %，如 CSS 中的百分号）原样进块缓冲
+    chunk[len++] = *p++;
+    if (len >= sizeof(chunk)) flush();
+  }
+  flush();
+  server.sendContent("");  // 结束 chunked 响应
+}
+
 // 处理配置页面请求
 void handleRoot() {
   if (!checkAuth()) return;
-  
-  String html = String(htmlPage);
-  html.replace("%IP%", WiFi.localIP().toString());
-  html.replace("%WIFI_SSID%", String(WiFi.SSID()));
-  html.replace("%FREE_HEAP%", String(ESP.getFreeHeap() / 1024) + " KB");
-  long uptimeSec = millis() / 1000;
+
+  // 禁用缓存：固件更新后确保浏览器拉取新版页面，避免旧版 UI 与新固件不匹配
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "0");
+
   char uptimeBuf[16];
+  long uptimeSec = millis() / 1000;
   snprintf(uptimeBuf, sizeof(uptimeBuf), "%ld:%02ld:%02ld", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
-  html.replace("%UPTIME%", String(uptimeBuf));
-  html.replace("%WEB_USER%", config.webUser);
-  html.replace("%WEB_PASS%", config.webPass);
-  html.replace("%SMTP_SERVER%", config.smtpServer);
-  html.replace("%SMTP_PORT%", String(config.smtpPort));
-  html.replace("%SMTP_USER%", config.smtpUser);
-  html.replace("%SMTP_PASS%", config.smtpPass);
-  html.replace("%SMTP_SEND_TO%", config.smtpSendTo);
-  html.replace("%ADMIN_PHONE%", config.adminPhone);
-  html.replace("%NUMBER_BLACK_LIST%", config.numberBlackList);
 
   // 概览页面的配置状态
   bool emailOk = config.smtpServer.length() > 0 && config.smtpUser.length() > 0 &&
                  config.smtpPass.length() > 0 && config.smtpSendTo.length() > 0;
-  html.replace("%SMTP_CHECK%", emailOk ? "已配置" : "未配置");
-  html.replace("%MODEM_CHECK%", modemReady ? "已就绪" : "未就绪");
   int pushCount = 0;
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     if (config.pushChannels[i].enabled) pushCount++;
   }
-  html.replace("%PUSH_COUNT%", String(pushCount));
-  
+
   // 生成推送通道HTML
   String channelsHtml = "";
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     String idx = String(i);
     String enabledClass = config.pushChannels[i].enabled ? " enabled" : "";
     String checked = config.pushChannels[i].enabled ? " checked" : "";
-    
+
     channelsHtml += "<div class=\"push-channel" + enabledClass + "\" id=\"channel" + idx + "\">";
     channelsHtml += "<div class=\"push-channel-header\">";
     channelsHtml += "<input type=\"checkbox\" name=\"push" + idx + "en\" id=\"push" + idx + "en\" onchange=\"toggleChannel(" + idx + ")\"" + checked + ">";
     channelsHtml += "<label for=\"push" + idx + "en\" class=\"label-inline\">启用推送通道 " + String(i + 1) + "</label>";
     channelsHtml += "</div>";
     channelsHtml += "<div class=\"push-channel-body\">";
-    
+
     // 通道名称
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>通道名称</label>";
     channelsHtml += "<input type=\"text\" name=\"push" + idx + "name\" value=\"" + config.pushChannels[i].name + "\" placeholder=\"自定义名称\">";
     channelsHtml += "</div>";
-    
+
     // 推送类型
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>推送方式</label>";
@@ -141,13 +194,13 @@ void handleRoot() {
     channelsHtml += "</select>";
     channelsHtml += "<div class=\"push-type-hint\" id=\"hint" + idx + "\"></div>";
     channelsHtml += "</div>";
-    
+
     // URL
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>推送URL/Webhook</label>";
     channelsHtml += "<input type=\"text\" name=\"push" + idx + "url\" id=\"url" + idx + "\" value=\"" + config.pushChannels[i].url + "\" placeholder=\"http://your-server.com/api 或 webhook地址\">";
     channelsHtml += "</div>";
-    
+
     // 额外参数区域（钉钉/PushPlus/Server酱等需要）
     channelsHtml += "<div id=\"extra" + idx + "\" style=\"display:none;\">";
     channelsHtml += "<div class=\"form-group\">";
@@ -159,7 +212,7 @@ void handleRoot() {
     channelsHtml += "<input type=\"text\" name=\"push" + idx + "key2\" id=\"key2" + idx + "\" value=\"" + config.pushChannels[i].key2 + "\">";
     channelsHtml += "</div>";
     channelsHtml += "</div>";
-    
+
     // 自定义模板区域
     channelsHtml += "<div id=\"custom" + idx + "\" style=\"display:none;\">";
     channelsHtml += "<div class=\"form-group\">";
@@ -167,16 +220,32 @@ void handleRoot() {
     channelsHtml += "<textarea name=\"push" + idx + "body\" rows=\"4\" style=\"width:100%;font-family:monospace;\">" + config.pushChannels[i].customBody + "</textarea>";
     channelsHtml += "</div>";
     channelsHtml += "</div>";
-    
+
     channelsHtml += "</div></div>";
   }
-  html.replace("%PUSH_CHANNELS%", channelsHtml);
-  
-  // 禁用缓存：固件更新后确保浏览器拉取新版页面，避免旧版 UI 与新固件不匹配
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.sendHeader("Pragma", "no-cache");
-  server.sendHeader("Expires", "0");
-  server.send(200, "text/html", html);
+
+  PageVar vars[] = {
+    {"IP", WiFi.localIP().toString()},
+    {"WIFI_SSID", String(WiFi.SSID())},
+    {"FREE_HEAP", String(ESP.getFreeHeap() / 1024) + " KB"},
+    {"UPTIME", String(uptimeBuf)},
+    {"WEB_USER", config.webUser},
+    {"WEB_PASS", config.webPass},
+    {"SMTP_SERVER", config.smtpServer},
+    {"SMTP_PORT", String(config.smtpPort)},
+    {"SMTP_USER", config.smtpUser},
+    {"SMTP_PASS", config.smtpPass},
+    {"SMTP_SEND_TO", config.smtpSendTo},
+    {"ADMIN_PHONE", config.adminPhone},
+    {"NUMBER_BLACK_LIST", config.numberBlackList},
+    {"SMTP_CHECK", emailOk ? "已配置" : "未配置"},
+    {"MODEM_CHECK", modemReady ? "已就绪" : "未就绪"},
+    {"DATA_MODE", config.smsOnly ? "仅收短信（数据已锁定）" : "标准（数据未锁定）"},
+    {"SMS_ONLY_CHECKED", config.smsOnly ? " checked" : ""},
+    {"PUSH_COUNT", String(pushCount)},
+    {"PUSH_CHANNELS", channelsHtml},
+  };
+  streamTemplatedPage(htmlPage, vars, sizeof(vars) / sizeof(vars[0]));
 }
 
 // 处理工具箱页面请求 — 已整合到主页，直接返回主页
@@ -187,41 +256,38 @@ void handleToolsPage() {
 // 处理飞行模式控制请求
 void handleFlightMode() {
   if (!checkAuth()) return;
-  
+
   String action = server.arg("action");
   String json = "{";
   bool success = false;
   String message = "";
-  
+
   if (action == "query") {
     // 查询当前功能模式
+    acquireModemPort("/flight query");
     logCaptureLn(String("网页端查询飞行模式: AT+CFUN?"));
     String resp = sendATCommand("AT+CFUN?", 2000);
     logCaptureLn(String("CFUN查询响应: " + resp));
-    
+    releaseModemPort();
+
     if (resp.indexOf("+CFUN:") >= 0) {
       success = true;
       int idx = resp.indexOf("+CFUN:");
       int mode = resp.substring(idx + 6).toInt();
-      
+
       String modeStr;
-      String statusIcon;
       if (mode == 0) {
         modeStr = "最小功能模式（关机）";
-        statusIcon = "🔴";
       } else if (mode == 1) {
         modeStr = "全功能模式（正常）";
-        statusIcon = "🟢";
       } else if (mode == 4) {
         modeStr = "飞行模式（射频关闭）";
-        statusIcon = "✈️";
       } else {
         modeStr = "未知模式 (" + String(mode) + ")";
-        statusIcon = "❓";
       }
-      
+
       message = "<table class='info-table'>";
-      message += "<tr><td>当前状态</td><td>" + statusIcon + " " + modeStr + "</td></tr>";
+      message += "<tr><td>当前状态</td><td>" + modeStr + "</td></tr>";
       message += "<tr><td>CFUN值</td><td>" + String(mode) + "</td></tr>";
       message += "</table>";
     } else {
@@ -230,53 +296,60 @@ void handleFlightMode() {
   }
   else if (action == "toggle") {
     // 先查询当前状态
+    acquireModemPort("/flight toggle");
     String resp = sendATCommand("AT+CFUN?", 2000);
     logCaptureLn(String("CFUN查询响应: " + resp));
-    
+
     if (resp.indexOf("+CFUN:") >= 0) {
       int idx = resp.indexOf("+CFUN:");
       int currentMode = resp.substring(idx + 6).toInt();
-      
+
       // 切换模式：1(正常) <-> 4(飞行模式)
       int newMode = (currentMode == 1) ? 4 : 1;
       String cmd = "AT+CFUN=" + String(newMode);
-      
+
       logCaptureLn(String("切换飞行模式: " + cmd));
       String setResp = sendATCommand(cmd.c_str(), 5000);
       logCaptureLn(String("CFUN设置响应: " + setResp));
-      
+      releaseModemPort();
+
       if (setResp.indexOf("OK") >= 0) {
         success = true;
         if (newMode == 4) {
-          message = "已开启飞行模式 ✈️<br>模组射频已关闭，无法收发短信";
+          message = "已开启飞行模式<br>模组射频已关闭，无法收发短信";
         } else {
-          message = "已关闭飞行模式 🟢<br>模组恢复正常工作";
+          message = "已关闭飞行模式<br>模组恢复正常工作";
         }
       } else {
         message = "切换失败: " + setResp;
       }
     } else {
+      releaseModemPort();
       message = "无法获取当前状态";
     }
   }
   else if (action == "on") {
     // 强制开启飞行模式
+    acquireModemPort("/flight on");
     logCaptureLn(String("网页端强制开启飞行模式: AT+CFUN=4"));
     String resp = sendATCommand("AT+CFUN=4", 5000);
+    releaseModemPort();
     if (resp.indexOf("OK") >= 0) {
       success = true;
-      message = "已开启飞行模式 ✈️";
+      message = "已开启飞行模式";
     } else {
       message = "开启失败: " + resp;
     }
   }
   else if (action == "off") {
     // 强制关闭飞行模式
+    acquireModemPort("/flight off");
     logCaptureLn(String("网页端关闭飞行模式: AT+CFUN=1"));
     String resp = sendATCommand("AT+CFUN=1", 5000);
+    releaseModemPort();
     if (resp.indexOf("OK") >= 0) {
       success = true;
-      message = "已关闭飞行模式 🟢";
+      message = "已关闭飞行模式";
     } else {
       message = "关闭失败: " + resp;
     }
@@ -284,29 +357,30 @@ void handleFlightMode() {
   else {
     message = "未知操作";
   }
-  
+
   json += "\"success\":" + String(success ? "true" : "false") + ",";
-  json += "\"message\":\"" + message + "\"";
+  json += "\"message\":\"" + jsonEscape(message) + "\"";
   json += "}";
-  
+
   server.send(200, "application/json", json);
 }
 
 // 处理AT指令测试请求
 void handleATCommand() {
   if (!checkAuth()) return;
-  
+  if (!acquireModemPort("/at")) return;
+
   String cmd = server.arg("cmd");
   bool success = false;
   String message = "";
-  
+
   if (cmd.length() == 0) {
     message = "错误：指令不能为空";
   } else {
     logCaptureLn(String("网页端发送AT指令: " + cmd));
     String resp = sendATCommand(cmd.c_str(), 5000);
     logCaptureLn(String("模组响应: " + resp));
-    
+
     if (resp.length() > 0) {
       success = true;
       message = resp;
@@ -314,6 +388,7 @@ void handleATCommand() {
       message = "超时或无响应";
     }
   }
+  releaseModemPort();
   
   String json = "{";
   json += "\"success\":" + String(success ? "true" : "false") + ",";
@@ -326,7 +401,8 @@ void handleATCommand() {
 // 处理模组信息查询请求
 void handleQuery() {
   if (!checkAuth()) return;
-  
+  if (!acquireModemPort("/query")) return;
+
   String type = server.arg("type");
   String json = "{";
   bool success = false;
@@ -606,27 +682,29 @@ void handleQuery() {
   else {
     message = "未知的查询类型";
   }
-  
+  releaseModemPort();
+
   json += "\"success\":" + String(success ? "true" : "false") + ",";
-  json += "\"message\":\"" + message + "\"";
+  json += "\"message\":\"" + jsonEscape(message) + "\"";
   json += "}";
-  
+
   server.send(200, "application/json", json);
 }
 
 // 处理发送短信请求
 void handleSendSms() {
   if (!checkAuth()) return;
-  
+  if (!acquireModemPort("/sendsms")) return;
+
   String phone = server.arg("phone");
   String content = server.arg("content");
-  
+
   phone.trim();
   content.trim();
-  
+
   bool success = false;
   String resultMsg = "";
-  
+
   if (phone.length() == 0) {
     resultMsg = "错误：请输入目标号码";
   } else if (content.length() == 0) {
@@ -635,36 +713,49 @@ void handleSendSms() {
     logCaptureLn(String("网页端发送短信请求"));
     logCaptureLn(String("目标号码: " + phone));
     logCaptureLn(String("短信内容: " + content));
-    
+
     success = sendSMS(phone.c_str(), content.c_str());
     resultMsg = success ? "短信发送成功！" : "短信发送失败，请检查模组状态";
   }
+  releaseModemPort();
   
   String html = R"rawliteral(
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="refresh" content="3;url=/sms">
   <title>发送结果</title>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding-top: 100px; background: #f5f5f5; }
-    .result { padding: 20px; border-radius: 10px; display: inline-block; }
-    .success { background: #4CAF50; color: white; }
-    .error { background: #f44336; color: white; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Roboto, Arial, sans-serif;
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      -webkit-font-smoothing: antialiased;
+    }
+    .result {
+      background: rgba(255,255,255,0.72);
+      -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
+      border: 1px solid rgba(0,0,0,0.06);
+      border-radius: 18px; padding: 36px 44px; text-align: center; max-width: 360px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+    }
+    .success h2 { color: #1d7a36; }
+    .error h2 { color: #c0271d; }
+    h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 6px; }
+    p { font-size: 13px; color: #6e6e73; }
   </style>
 </head>
 <body>
   <div class="result %CLASS%">
-    <h2>%ICON% %MSG%</h2>
+    <h2>%MSG%</h2>
     <p>3秒后返回发送页面...</p>
   </div>
 </body>
 </html>
 )rawliteral";
-  
+
   html.replace("%CLASS%", success ? "success" : "error");
-  html.replace("%ICON%", success ? "✅" : "❌");
   html.replace("%MSG%", resultMsg);
   
   server.send(200, "text/html", html);
@@ -673,7 +764,16 @@ void handleSendSms() {
 // 处理Ping请求
 void handlePing() {
   if (!checkAuth()) return;
-  
+
+  // 仅收短信模式下拒绝 Ping：Ping 需要临时激活数据承载（AT+CGACT=1,1），
+  // 漫游卡可能因此产生流量扣费
+  if (config.smsOnly) {
+    logCaptureLn(String("仅收短信模式下拒绝Ping请求（数据连接已锁定）"));
+    server.send(200, "application/json", "{\"success\":false,\"message\":\"仅收短信模式已锁定数据连接，Ping 会临时开启数据、可能产生漫游流量。如确需使用，请先在“模组控制”页关闭“仅收短信模式”。\"}");
+    return;
+  }
+  if (!acquireModemPort("/ping")) return;
+
   logCaptureLn(String("网页端发起Ping请求"));
   
   // 清空串口缓冲区
@@ -710,7 +810,6 @@ void handlePing() {
     while (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
-      logCapture(String(c));  // 调试输出
       
       // 检查是否收到OK
       if (resp.indexOf("OK") >= 0 && !gotOK) {
@@ -827,6 +926,7 @@ void handlePing() {
   logCaptureLn(String("关闭PDP上下文(CGACT=0)..."));
   String deactivateResp = sendATCommand("AT+CGACT=0,1", 5000);
   logCaptureLn(String("CGACT关闭响应: " + deactivateResp));
+  releaseModemPort();
   
   // 构建JSON响应
   String json = "{";
@@ -922,19 +1022,32 @@ void handleSave() {
   
   String html = R"rawliteral(
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="refresh" content="3;url=/">
   <title>保存成功</title>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding-top: 100px; background: #f5f5f5; }
-    .success { background: #4CAF50; color: white; padding: 20px; border-radius: 10px; display: inline-block; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Roboto, Arial, sans-serif;
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      -webkit-font-smoothing: antialiased;
+    }
+    .result {
+      background: rgba(255,255,255,0.72);
+      -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
+      border: 1px solid rgba(0,0,0,0.06);
+      border-radius: 18px; padding: 36px 44px; text-align: center; max-width: 380px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+    }
+    h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; color: #1d7a36; margin-bottom: 6px; }
+    p { font-size: 13px; color: #6e6e73; margin-bottom: 4px; }
   </style>
 </head>
 <body>
-  <div class="success">
-    <h2>✅ 配置保存成功！</h2>
+  <div class="result">
+    <h2>配置保存成功</h2>
     <p>3秒后返回配置页面...</p>
     <p>如果修改了账号密码，请使用新的账号密码登录</p>
   </div>
@@ -975,12 +1088,7 @@ void handleModem() {
 
   // 防止重入：modemInit() 内部会调 server.handleClient()，
   // 若浏览器超时重试会导致嵌套调用，最终拖垮 WiFi
-  static bool busy = false;
-  if (busy) {
-    server.send(429, "application/json", "{\"success\":false,\"message\":\"模组正忙，请稍后重试\"}");
-    return;
-  }
-  busy = true;
+  if (!acquireModemPort("/modem")) return;
 
   String action = server.arg("action");
   String json = "{";
@@ -996,7 +1104,7 @@ void handleModem() {
     message = success ? "模组软重启成功" : "软重启失败";
     logCaptureLn(String(message + ": " + resp));
     if (success) modemInit();
-    busy = false;
+    releaseModemPort();
     return;
   }
   else if (action == "hardreset") {
@@ -1004,6 +1112,7 @@ void handleModem() {
     logCaptureLn(String("网页端请求硬重启模组..."));
     server.send(200, "application/json", "{\"success\":true,\"message\":\"正在硬重启模组，请等待约 15 秒后刷新页面\"}");
     resetModule();
+    releaseModemPort();  // 必须释放，否则此后所有模组请求都会被 429 拒绝
     return;
   }
   else if (action == "signal") {
@@ -1074,7 +1183,7 @@ void handleModem() {
   json += "\"success\":" + String(success ? "true" : "false") + ",";
   json += "\"message\":\"" + jsonEscape(message) + "\"";
   json += "}";
-  busy = false;
+  releaseModemPort();
   server.send(200, "application/json", json);
 }
 
@@ -1131,4 +1240,31 @@ void handleSystem() {
   } else {
     server.send(200, "application/json", "{\"success\":false,\"message\":\"未知操作\"}");
   }
+}
+
+// 仅收短信模式开关（锁定模组数据连接，防止漫游流量扣费）
+// GET /datalock?lock=on|off 设置，无参数时查询当前状态
+void handleDataLock() {
+  if (!checkAuth()) return;
+
+  String lock = server.arg("lock");
+  if (lock == "on" || lock == "off") {
+    config.smsOnly = (lock == "on");
+    saveConfig();
+    logCaptureLn(String(config.smsOnly ? "仅收短信模式已开启：锁定数据连接" : "仅收短信模式已关闭：允许Ping使用数据"));
+    if (config.smsOnly && modemReady) {
+      // 立即去激活数据承载，不用等下次重启
+      if (!acquireModemPort("/datalock")) return;
+      String resp = sendATCommand("AT+CGACT=0,1", 5000);
+      logCaptureLn(String("CGACT去激活响应: " + resp));
+      releaseModemPort();
+    }
+  }
+
+  String json = "{";
+  json += "\"success\":true,";
+  json += "\"smsOnly\":" + String(config.smsOnly ? "true" : "false") + ",";
+  json += "\"message\":\"" + String(config.smsOnly ? "仅收短信模式已开启，数据连接已锁定" : "仅收短信模式已关闭，Ping 可用") + "\"";
+  json += "}";
+  server.send(200, "application/json", json);
 }

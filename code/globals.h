@@ -35,6 +35,7 @@ extern WebServer server;
 extern bool configValid;
 extern bool timeSynced;
 extern bool modemReady;
+extern bool modemPortBusy;   // Serial1 互斥：长 AT 操作期间拒绝其他模组请求，防止嵌套 handleClient 抢读串口
 extern unsigned long lastPrintTime;
 extern ConcatSms concatBuffer[MAX_CONCAT_MESSAGES];
 

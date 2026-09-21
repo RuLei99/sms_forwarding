@@ -9,5 +9,6 @@ WebServer server(80);
 bool configValid = false;
 bool timeSynced = false;
 bool modemReady = false;
+bool modemPortBusy = false;
 unsigned long lastPrintTime = 0;
 ConcatSms concatBuffer[MAX_CONCAT_MESSAGES];

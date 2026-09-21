@@ -116,6 +116,17 @@ void modemInit() {
   if (ceregRetry < 30) {
     logCaptureLn(String("网络已注册"));
     modemReady = true;
+    if (config.smsOnly) {
+      // LTE附着后网络可能自动重建默认承载，再补一次去激活，确保零流量
+      // ML307Y 对 CGACT 命令有兼容问题（见上方 need_set_CGACT 判断），只能跳过
+      if (!need_set_CGACT) {
+        logCaptureLn(String("⚠️ 仅收短信模式：该型号无法主动去激活数据承载，注意流量消耗"));
+      } else if (sendATandWaitOK("AT+CGACT=0,1", 5000)) {
+        logCaptureLn(String("仅收短信模式：已再次去激活数据承载(AT+CGACT=0,1)"));
+      } else {
+        logCaptureLn(String("仅收短信模式：数据承载去激活失败（不影响收短信）"));
+      }
+    }
   } else {
     logCaptureLn(String("⚠️ 网络注册超时（无SIM卡或信号差），模组功能不可用"));
     modemReady = false;

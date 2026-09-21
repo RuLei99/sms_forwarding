@@ -5,222 +5,185 @@ const char* htmlPage = R"rawliteral(
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f5f7">
   <title>SMS Forwarding</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%231d1d1f'/%3E%3Cpath d='M32 15c-9.4 0-17 5.9-17 13.3 0 4.2 2.4 7.9 6.2 10.3-.2 2-1 3.8-2.6 5.4 3-.2 5.7-1.3 7.8-2.8 1.7.5 3.6.7 5.6.7 9.4 0 17-5.9 17-13.4S41.4 15 32 15z' fill='%23fff'/%3E%3C/svg%3E">
   <style>
-    :root {
-      --ink: #171717;
-      --body: #4d4d4d;
-      --mute: #888888;
-      --canvas: #ffffff;
-      --canvas-soft: #fafafa;
-      --canvas-soft-2: #f5f5f5;
-      --hairline: #ebebeb;
-      --hairline-strong: #a1a1a1;
-      --link: #0070f3;
-      --error: #ee0000;
-      --warning-soft: #ffefcf;
-      --sidebar-w: 220px;
-      --radius-sm: 6px;
-      --radius-md: 8px;
-      --radius-pill: 100px;
-      --shadow-card: 0 0 0 1px rgba(0,0,0,0.08), 0 1px 1px rgba(0,0,0,0.02), 0 2px 2px rgba(0,0,0,0.04);
+    :root{--ink:#1d1d1f;--mute:#6e6e73;--faint:#86868b;--accent:#0071e3;--accent-hover:#0077ed;--accent-soft:rgba(0,113,227,.1);--green:#34c759;--red:#ff3b30;--hairline:rgba(0,0,0,.08);--glass:rgba(255,255,255,.72);--glass-strong:rgba(255,255,255,.88);--radius:16px;--radius-md:12px;--radius-sm:8px;--pill:980px;--sidebar-w:230px;--mono:ui-monospace,'SF Mono','Cascadia Code','JetBrains Mono',Consolas,monospace;--ease:cubic-bezier(.25,.1,.25,1);--shadow-card:0 .5px 1px rgba(0,0,0,.04),0 6px 24px rgba(0,0,0,.05)}
+    *{box-sizing:border-box;margin:0;padding:0}
+    html{background:#f5f5f7}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Segoe UI',Roboto,Arial,sans-serif;font-size:14px;line-height:1.5;color:var(--ink);display:flex;min-height:100vh;-webkit-font-smoothing:antialiased}
+    body::before{content:'';position:fixed;inset:0;z-index:-1;background:radial-gradient(1100px 480px at 50% -12%,rgba(10,132,255,.06),transparent 70%),#f5f5f7}
+    ::selection{background:rgba(0,113,227,.2)}
+    ::-webkit-scrollbar{width:8px;height:8px}
+    ::-webkit-scrollbar-thumb{background:rgba(0,0,0,.16);border-radius:4px}
+    ::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,.26)}
+    ::-webkit-scrollbar-track{background:transparent}
+    button{font-family:inherit}
+    :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+    .sidebar{position:fixed;top:0;left:0;bottom:0;width:var(--sidebar-w);background:rgba(255,255,255,.6);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border-right:1px solid rgba(0,0,0,.06);display:flex;flex-direction:column;z-index:100;overflow-y:auto}
+    .sidebar-brand{padding:24px 18px 18px;display:flex;align-items:center;gap:10px}
+    .brand-mark{width:30px;height:30px;border-radius:7.5px;flex-shrink:0;background:#1d1d1f;display:flex;align-items:center;justify-content:center}
+    .brand-mark svg{width:17px;height:17px;color:#fff}
+    .sidebar-brand h2{font-size:15px;font-weight:600;letter-spacing:-.01em;line-height:1.2}
+    .sidebar-brand span{font-size:11px;color:var(--mute);display:block;margin-top:1px}
+    .sidebar-nav{flex:1;padding:4px 12px 12px}
+    .sidebar-nav a{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:var(--radius-sm);color:var(--mute);font-size:13px;font-weight:500;text-decoration:none;transition:background .18s var(--ease),color .18s var(--ease);margin-bottom:1px;cursor:pointer;user-select:none}
+    .sidebar-nav a:hover{background:rgba(0,0,0,.045);color:var(--ink)}
+    .sidebar-nav a:active{background:rgba(0,0,0,.075)}
+    .sidebar-nav a.active{background:rgba(0,0,0,.055);color:var(--ink)}
+    .ico{width:18px;height:18px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+    .sidebar-divider{height:1px;background:var(--hairline);margin:10px 12px}
+    .sidebar-section-label{font-size:11px;color:var(--faint);padding:6px 11px;text-transform:uppercase;letter-spacing:.05em;font-weight:500}
+    .sidebar-footer{padding:12px 16px 16px}
+    .sidebar-footer .btn{width:100%}
+    .main{margin-left:var(--sidebar-w);flex:1;display:flex;justify-content:center;min-width:0}
+    .content{width:100%;max-width:820px;padding:40px 32px 64px}
+    .page-title{font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1.15;margin-bottom:5px}
+    .page-subtitle{font-size:14px;color:var(--mute);margin-bottom:28px}
+    .status-live{color:#248a3d;font-weight:500;animation:pulse 2.2s ease-in-out infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+    .card{background:var(--glass);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border:1px solid rgba(0,0,0,.05);border-radius:var(--radius);box-shadow:var(--shadow-card);margin-bottom:16px}
+    .card-header{padding:18px 22px 0;font-size:14px;font-weight:600;letter-spacing:-.01em}
+    .card-body{padding:15px 22px 22px}
+    .card-header+.card-body{padding-top:13px}
+    .panel{display:none}
+    .panel.active{display:block;animation:panelIn .4s var(--ease) both}
+    @keyframes panelIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+    .form-group{margin-bottom:16px}
+    .form-group:last-child{margin-bottom:0}
+    .form-label,.push-channel-body label{display:block;font-size:12px;font-weight:500;color:var(--mute);margin-bottom:5px}
+    .form-input,.form-select,.form-textarea,.push-channel-body input[type="text"],.push-channel-body input[type="password"],.push-channel-body select,.push-channel-body textarea{width:100%;padding:8px 11px;font-size:14px;font-family:inherit;border:1px solid #d2d2d7;border-radius:var(--radius-sm);background:#fff;color:var(--ink);transition:border-color .18s var(--ease),box-shadow .18s var(--ease);outline:none}
+    .form-input:hover,.form-select:hover,.form-textarea:hover,.push-channel-body input:hover,.push-channel-body select:hover,.push-channel-body textarea:hover{border-color:#a1a1a6}
+    .form-input:focus,.form-select:focus,.form-textarea:focus,.push-channel-body input:focus,.push-channel-body select:focus,.push-channel-body textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3.5px rgba(0,113,227,.16)}
+    .form-input::placeholder,.form-textarea::placeholder,.push-channel-body input::placeholder,.push-channel-body textarea::placeholder{color:rgba(60,60,67,.35)}
+    .form-select,.push-channel-body select{cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center;padding-right:28px;-webkit-appearance:none;appearance:none}
+    .form-textarea,.push-channel-body textarea{resize:vertical;min-height:76px;line-height:1.55}
+    .form-hint{font-size:12px;color:var(--faint);margin-top:6px;line-height:1.5}
+    .form-warning{font-size:12px;color:#8a5300;background:rgba(255,159,10,.12);border:1px solid rgba(255,159,10,.2);padding:10px 14px;border-radius:var(--radius-sm);margin-bottom:16px;line-height:1.55}
+    .form-row{display:flex;gap:14px}
+    .form-row .form-group{flex:1}
+    input[type="checkbox"]{-webkit-appearance:none;appearance:none;width:42px;height:25px;border-radius:13px;background:rgba(120,120,128,.32);position:relative;cursor:pointer;flex-shrink:0;margin:0;transition:background .25s var(--ease);outline-offset:3px}
+    input[type="checkbox"]::after{content:'';position:absolute;top:2px;left:2px;width:21px;height:21px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.22),0 0 .5px rgba(0,0,0,.12);transition:transform .25s var(--ease)}
+    input[type="checkbox"]:checked{background:var(--green)}
+    input[type="checkbox"]:checked::after{transform:translateX(17px)}
+    input[type="checkbox"]:active::after{width:24px}
+    input[type="checkbox"]:checked:active::after{transform:translateX(14px)}
+    .toggle-row{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}
+    .toggle-text{flex:1;min-width:0}
+    .toggle-title{font-size:14px;font-weight:600;margin-bottom:4px}
+    .toggle-row input[type="checkbox"]{margin-top:2px}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 17px;font-size:14px;font-weight:500;border-radius:var(--pill);border:none;cursor:pointer;transition:background .18s var(--ease),transform .12s var(--ease);line-height:1.4;white-space:nowrap;user-select:none}
+    .btn:active:not(:disabled){transform:scale(.97)}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .btn-primary{background:var(--accent);color:#fff}
+    .btn-primary:hover:not(:disabled){background:var(--accent-hover)}
+    .btn-secondary,.btn-white{background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1px #d2d2d7}
+    .btn-secondary:hover:not(:disabled),.btn-white:hover{background:#f5f5f7;box-shadow:inset 0 0 0 1px #b8b8bd}
+    .btn-danger{background:var(--red);color:#fff}
+    .btn-danger:hover:not(:disabled){background:#ff453a}
+    .btn-sm{padding:5px 12px;font-size:12.5px}
+    .btn-block{width:100%}
+    .btn-save{padding:11px 22px;font-size:15px;margin-top:4px}
+    .push-channel{border:1px solid var(--hairline);border-radius:var(--radius-md);padding:15px;margin-bottom:12px;background:rgba(255,255,255,.5);transition:border-color .2s var(--ease),background .2s var(--ease)}
+    .push-channel:hover{border-color:rgba(0,0,0,.14)}
+    .push-channel.enabled{border-color:rgba(0,113,227,.35);background:rgba(255,255,255,.72)}
+    .push-channel-header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+    .push-channel-header label{font-size:14px;font-weight:600;cursor:pointer}
+    .push-channel-body{display:none}
+    .push-channel.enabled .push-channel-body{display:block;animation:panelIn .3s var(--ease) both}
+    .push-channel-body .form-group{margin-bottom:13px}
+    .push-channel-body .form-group:last-child{margin-bottom:0}
+    .push-type-hint{font-size:11.5px;color:var(--mute);margin-top:7px;padding:9px 13px;background:rgba(0,0,0,.035);border-radius:8px;font-family:var(--mono);line-height:1.6;word-break:break-all}
+    .result-box{margin-top:13px;padding:11px 15px;border-radius:var(--radius-sm);display:none;font-size:13px;line-height:1.55;animation:panelIn .3s var(--ease) both}
+    .result-success{background:rgba(52,199,89,.13);color:#1d7a36;display:block}
+    .result-error{background:rgba(255,59,48,.1);color:#c0271d;display:block}
+    .result-loading{background:rgba(255,149,0,.12);color:#92400e;display:block}
+    .result-info{background:var(--accent-soft);color:#0058b0;display:block}
+    .info-table{width:100%;border-collapse:collapse;margin-top:2px;font-size:13px}
+    .info-table td{padding:7px 6px;border-bottom:1px solid rgba(0,0,0,.045);vertical-align:top}
+    .info-table tr:last-child td{border-bottom:none}
+    .info-table td:first-child{font-weight:500;color:var(--mute);width:42%}
+    .overview-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+    .overview-item{background:#fff;border:1px solid #e8e8ed;border-radius:var(--radius-md);padding:14px 16px}
+    .overview-item .label{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;font-weight:500;margin-bottom:4px}
+    .overview-item .value{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;word-break:break-all}
+    .btn-row{display:flex;gap:8px;flex-wrap:wrap}
+    .btn-row .btn{flex:1;min-width:96px}
+    .btn-row+.btn-row{margin-top:9px}
+    .console{background:#1d1d1f;color:#e8e8ed;font-family:var(--mono);font-size:12px;line-height:1.65;border-radius:var(--radius-md);padding:14px 16px;white-space:pre-wrap;word-break:break-all;overflow-y:auto}
+    #atLog{min-height:136px;max-height:280px;margin-bottom:10px}
+    #logView{min-height:300px;max-height:62vh}
+    .at-bar{display:flex;gap:8px}
+    .at-bar input{flex:1;font-family:var(--mono)}
+    .at-bar .btn{min-width:64px}
+    @media (max-width:740px){
+      .sidebar{top:auto;right:0;bottom:0;width:100%;height:auto;flex-direction:row;align-items:stretch;background:rgba(255,255,255,.78);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border-right:none;border-top:1px solid rgba(0,0,0,.06);padding-bottom:env(safe-area-inset-bottom)}
+      .sidebar-brand,.sidebar-divider,.sidebar-footer{display:none}
+      .sidebar-nav{display:flex;overflow-x:auto;padding:6px 8px;scrollbar-width:none}
+      .sidebar-nav::-webkit-scrollbar{display:none}
+      .sidebar-section-label{display:none}
+      .sidebar-nav a{flex-direction:column;gap:3px;padding:6px 10px;min-width:56px;font-size:10px;text-align:center}
+      .sidebar-nav a .ico{width:20px;height:20px}
+      .sidebar-nav a.active{background:var(--accent-soft);color:var(--accent)}
+      .main{margin-left:0}
+      .content{padding:24px 18px calc(92px + env(safe-area-inset-bottom))}
+      .page-title{font-size:24px}
+      .form-row{flex-direction:column;gap:0}
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-      font-size: 14px; font-weight: 400; line-height: 1.5;
-      color: var(--ink); background: var(--canvas-soft);
-      display: flex; min-height: 100vh;
-    }
-
-    /* Sidebar */
-    .sidebar {
-      position: fixed; top: 0; left: 0; bottom: 0; width: var(--sidebar-w);
-      background: var(--ink); display: flex; flex-direction: column;
-      z-index: 100; overflow-y: auto;
-    }
-    .sidebar-brand { padding: 22px 18px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
-    .sidebar-brand h2 { font-size: 17px; font-weight: 600; color: #fff; letter-spacing: -0.4px; }
-    .sidebar-brand span { font-size: 10px; color: rgba(255,255,255,0.4); display: block; margin-top: 1px; font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace; }
-    .sidebar-nav { flex: 1; padding: 10px; }
-    .sidebar-nav a {
-      display: flex; align-items: center; gap: 10px; padding: 9px 12px;
-      border-radius: var(--radius-sm); color: rgba(255,255,255,0.6);
-      font-size: 13px; font-weight: 500; text-decoration: none;
-      transition: all 0.12s; margin-bottom: 1px; cursor: pointer;
-    }
-    .sidebar-nav a:hover { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.85); }
-    .sidebar-nav a.active { background: rgba(255,255,255,0.12); color: #fff; }
-    .sidebar-nav a .ico { font-size: 15px; width: 20px; text-align: center; flex-shrink: 0; }
-    .sidebar-divider { height: 1px; background: rgba(255,255,255,0.08); margin: 8px 12px; }
-    .sidebar-section-label { font-size: 10px; color: rgba(255,255,255,0.3); padding: 4px 16px 6px; text-transform: uppercase; letter-spacing: 0.6px; font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace; }
-    .sidebar-footer { padding: 12px 16px; border-top: 1px solid rgba(255,255,255,0.08); }
-    .sidebar-footer .btn { width: 100%; }
-
-    /* Main */
-    .main {
-      margin-left: var(--sidebar-w); flex: 1; padding: 32px;
-      max-width: 780px; width: 100%;
-    }
-    .page-title { font-size: 22px; font-weight: 600; color: var(--ink); letter-spacing: -0.5px; margin-bottom: 6px; }
-    .page-subtitle { font-size: 13px; color: var(--mute); margin-bottom: 24px; }
-
-    /* Card */
-    .card { background: var(--canvas); border-radius: var(--radius-md); box-shadow: var(--shadow-card); margin-bottom: 18px; }
-    .card-header { padding: 16px 22px 0; font-size: 14px; font-weight: 600; color: var(--ink); letter-spacing: -0.2px; display: flex; align-items: center; gap: 8px; }
-    .card-body { padding: 16px 22px 22px; }
-    .card-header + .card-body { padding-top: 12px; }
-
-    /* Panel hide/show */
-    .panel { display: none; }
-    .panel.active { display: block; }
-
-    /* Form */
-    .form-group { margin-bottom: 14px; }
-    .form-group:last-child { margin-bottom: 0; }
-    .form-label { display: block; font-size: 12px; font-weight: 500; color: var(--body); margin-bottom: 4px; letter-spacing: -0.1px; }
-    .form-input, .form-select, .form-textarea {
-      width: 100%; padding: 7px 11px; font-size: 13px; font-family: inherit;
-      border: 1px solid var(--hairline); border-radius: var(--radius-sm);
-      background: var(--canvas); color: var(--ink);
-      transition: border-color 0.15s, box-shadow 0.15s; outline: none;
-    }
-    .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
-    .form-select { cursor: pointer; }
-    .form-textarea { resize: vertical; min-height: 70px; line-height: 1.5; }
-    .form-hint { font-size: 11px; color: var(--mute); margin-top: 3px; line-height: 1.4; }
-    .form-warning { font-size: 11px; color: #ab570a; background: var(--warning-soft); padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 14px; line-height: 1.5; }
-    .form-row { display: flex; gap: 14px; }
-    .form-row .form-group { flex: 1; }
-
-    /* Buttons */
-    .btn {
-      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-      padding: 7px 14px; font-size: 13px; font-weight: 500; font-family: inherit;
-      border-radius: var(--radius-pill); border: none; cursor: pointer;
-      transition: all 0.15s; line-height: 1.4; white-space: nowrap;
-    }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-primary { background: var(--ink); color: #fff; }
-    .btn-primary:hover { background: #2a2a2a; }
-    .btn-secondary { background: var(--canvas); color: var(--ink); box-shadow: 0 0 0 1px var(--hairline); }
-    .btn-secondary:hover { background: var(--canvas-soft-2); }
-    .btn-danger { background: var(--error); color: #fff; }
-    .btn-danger:hover { background: #c50000; }
-    .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: var(--radius-sm); }
-    .btn-white { background: #fff; color: var(--ink); }
-    .btn-white:hover { background: #f0f0f0; }
-    .btn-block { width: 100%; justify-content: center; }
-    .btn-save { padding: 10px 20px; font-size: 14px; margin-top: 4px; }
-
-    /* Push Channel */
-    .push-channel { border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 14px; margin-bottom: 10px; background: var(--canvas-soft); transition: border-color 0.15s; }
-    .push-channel:hover { border-color: var(--hairline-strong); }
-    .push-channel-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-    .push-channel-header label { font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer; }
-    .push-channel-header input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--ink); }
-    .push-channel-body { display: none; }
-    .push-channel.enabled .push-channel-body { display: block; }
-    .push-channel.enabled { border-color: var(--hairline-strong); background: var(--canvas); }
-    .push-channel-body .form-group { margin-bottom: 12px; }
-    .push-channel-body .form-group:last-child { margin-bottom: 0; }
-    .push-channel-body label { display: block; font-size: 12px; font-weight: 500; color: var(--body); margin-bottom: 4px; letter-spacing: -0.1px; }
-    .push-channel-body input[type="text"], .push-channel-body input[type="password"], .push-channel-body select, .push-channel-body textarea {
-      width: 100%; padding: 7px 11px; font-size: 13px; font-family: inherit;
-      border: 1px solid var(--hairline); border-radius: var(--radius-sm);
-      background: var(--canvas); color: var(--ink);
-      transition: border-color 0.15s, box-shadow 0.15s; outline: none;
-    }
-    .push-channel-body input:focus, .push-channel-body select:focus, .push-channel-body textarea:focus { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
-    .push-channel-body select { cursor: pointer; }
-    .push-channel-body textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
-    .push-type-hint { font-size: 11px; color: var(--body); margin-top: 4px; padding: 8px 12px; background: var(--canvas-soft-2); border-radius: var(--radius-sm); font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace; line-height: 1.5; }
-
-    /* Result Boxes */
-    .result-box { margin-top: 12px; padding: 10px 14px; border-radius: var(--radius-sm); display: none; font-size: 12px; line-height: 1.5; }
-    .result-success { background: #e8f5e9; color: #2e7d32; display: block; }
-    .result-error { background: #ffebee; color: #c62828; display: block; }
-    .result-loading { background: #fff3e0; color: #e65100; display: block; }
-    .result-info { background: #e3f2fd; color: #1565c0; display: block; }
-    .info-table { width: 100%; border-collapse: collapse; margin-top: 4px; font-size: 12px; }
-    .info-table td { padding: 5px 8px; border-bottom: 1px solid var(--hairline); }
-    .info-table td:first-child { font-weight: 500; color: var(--body); width: 40%; }
-
-    /* Overview */
-    .overview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-    .overview-item { background: var(--canvas-soft); border-radius: var(--radius-sm); padding: 14px; }
-    .overview-item .label { font-size: 10px; color: var(--mute); text-transform: uppercase; letter-spacing: 0.4px; font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace; margin-bottom: 4px; }
-    .overview-item .value { font-size: 14px; font-weight: 600; color: var(--ink); }
-
-    /* Tools */
-    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
-    .btn-row .btn { flex: 1; min-width: 90px; }
-    .btn-row + .btn-row { margin-top: 8px; }
-    #atLog {
-      background: var(--ink); color: #50e3c2; font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace;
-      min-height: 130px; max-height: 260px; overflow-y: auto; padding: 12px 14px;
-      border-radius: var(--radius-sm); margin-bottom: 10px; font-size: 12px;
-      white-space: pre-wrap; word-break: break-all; line-height: 1.5;
-    }
-    .at-bar { display: flex; gap: 6px; }
-    .at-bar input { flex: 1; font-family: 'SF Mono','Cascadia Code','JetBrains Mono','Consolas',monospace; }
-    .at-bar .btn { min-width: 60px; }
-
-    /* Responsive */
-    @media (max-width: 700px) {
-      .sidebar { width: 50px; }
-      .sidebar-brand h2 { font-size: 0; }
-      .sidebar-brand h2::first-letter { font-size: 16px; }
-      .sidebar-brand span, .sidebar-section-label { display: none; }
-      .sidebar-nav a { padding: 10px; justify-content: center; }
-      .sidebar-nav a span:not(.ico) { display: none; }
-      .sidebar-nav a .ico { font-size: 16px; }
-      .sidebar-divider { margin: 6px 8px; }
-      .sidebar-footer { padding: 8px; }
-      .sidebar-footer .btn span { display: none; }
-      .sidebar-footer .btn { padding: 6px; font-size: 11px; }
-      .main { margin-left: 50px; padding: 18px 14px; }
-      :root { --sidebar-w: 50px; }
-      .overview-grid { grid-template-columns: 1fr; }
-    }
+    @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
   </style>
 </head>
 <body>
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <symbol id="ig" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></symbol>
+    <symbol id="iu" viewBox="0 0 24 24"><circle cx="12" cy="8.2" r="3.6"/><path d="M5.5 19.5c1.2-3.2 3.6-4.8 6.5-4.8s5.3 1.6 6.5 4.8"/></symbol>
+    <symbol id="im" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M4.5 7.5l7.5 6 7.5-6"/></symbol>
+    <symbol id="ip" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 16V8.5M8.8 11.2L12 8l3.2 3.2"/></symbol>
+    <symbol id="is" viewBox="0 0 24 24"><path d="M12 3.5l7 2.5v5.5c0 4.5-2.9 7.6-7 9-4.1-1.4-7-4.5-7-9V6z"/></symbol>
+    <symbol id="ie" viewBox="0 0 24 24"><path d="M20.5 3.5L10.8 13.2M20.5 3.5l-6.2 17-3.5-7.3-7.3-3.5z"/></symbol>
+    <symbol id="ic" viewBox="0 0 24 24"><path d="M4.5 19.5h15M7 19.5v-6.5M12 19.5v-11M17 19.5v-4"/></symbol>
+    <symbol id="io" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.1 3.9 8.5s-1.3 6.2-3.9 8.5c-2.6-2.3-3.9-5.1-3.9-8.5s1.3-6.2 3.9-8.5z"/></symbol>
+    <symbol id="ir" viewBox="0 0 24 24"><path d="M8.6 15.4a4.8 4.8 0 010-6.8M15.4 8.6a4.8 4.8 0 010 6.8M5.8 18.2a8.8 8.8 0 010-12.4M18.2 5.8a8.8 8.8 0 010 12.4"/></symbol>
+    <symbol id="it" viewBox="0 0 24 24"><path d="M5 8l4 4-4 4M12.5 16.5H19"/></symbol>
+    <symbol id="il" viewBox="0 0 24 24"><path d="M8.5 6.5h11M8.5 12h11M8.5 17.5h11M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01"/></symbol>
+  </svg>
+
   <aside class="sidebar">
     <div class="sidebar-brand">
-      <h2>SMS FWD</h2>
-      <span>短信转发器</span>
+      <div class="brand-mark"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.6c-4.6 0-8.3 2.9-8.3 6.5 0 2.1 1.2 3.9 3.1 5.1-.1 1-.5 1.9-1.3 2.7 1.5-.1 2.8-.7 3.8-1.4.9.3 1.8.4 2.7.4 4.6 0 8.3-2.9 8.3-6.5S16.6 4.6 12 4.6z"/></svg></div>
+      <div><h2>SMS FWD</h2><span>短信转发器</span></div>
     </div>
     <nav class="sidebar-nav">
       <div class="sidebar-section-label">配置</div>
-      <a data-panel="overview" class="active"><span class="ico">🏠</span> <span>系统概览</span></a>
-      <a data-panel="account"><span class="ico">🔐</span> <span>账号管理</span></a>
-      <a data-panel="email"><span class="ico">📧</span> <span>邮件通知</span></a>
-      <a data-panel="push"><span class="ico">🔗</span> <span>推送通道</span></a>
-      <a data-panel="admin"><span class="ico">👤</span> <span>管理员 &amp; 黑名单</span></a>
+      <a data-panel="overview" class="active"><svg class="ico"><use href="#ig"/></svg><span class="txt">系统概览</span></a>
+      <a data-panel="account"><svg class="ico"><use href="#iu"/></svg><span class="txt">账号管理</span></a>
+      <a data-panel="email"><svg class="ico"><use href="#im"/></svg><span class="txt">邮件通知</span></a>
+      <a data-panel="push"><svg class="ico"><use href="#ip"/></svg><span class="txt">推送通道</span></a>
+      <a data-panel="admin"><svg class="ico"><use href="#is"/></svg><span class="txt">管理员 &amp; 黑名单</span></a>
       <div class="sidebar-divider"></div>
       <div class="sidebar-section-label">工具</div>
-      <a data-panel="sendsms"><span class="ico">📤</span> <span>发送短信</span></a>
-      <a data-panel="diagnose"><span class="ico">📊</span> <span>模组诊断</span></a>
-      <a data-panel="network"><span class="ico">🌐</span> <span>网络测试</span></a>
-      <a data-panel="modem"><span class="ico">✈</span> <span>模组控制</span></a>
-      <a data-panel="atterm"><span class="ico">💻</span> <span>AT 终端</span></a>
-      <a data-panel="log"><span class="ico">📋</span> <span>系统日志</span></a>
+      <a data-panel="sendsms"><svg class="ico"><use href="#ie"/></svg><span class="txt">发送短信</span></a>
+      <a data-panel="diagnose"><svg class="ico"><use href="#ic"/></svg><span class="txt">模组诊断</span></a>
+      <a data-panel="network"><svg class="ico"><use href="#io"/></svg><span class="txt">网络测试</span></a>
+      <a data-panel="modem"><svg class="ico"><use href="#ir"/></svg><span class="txt">模组控制</span></a>
+      <a data-panel="atterm"><svg class="ico"><use href="#it"/></svg><span class="txt">AT 终端</span></a>
+      <a data-panel="log"><svg class="ico"><use href="#il"/></svg><span class="txt">系统日志</span></a>
     </nav>
     <div class="sidebar-footer">
-      <button class="btn btn-white btn-sm btn-block" onclick="switchPanel('account')"><span>修改密码</span> 🔑</button>
+      <button class="btn btn-white btn-sm btn-block" onclick="switchPanel('account')"><span>修改密码</span></button>
     </div>
   </aside>
 
   <main class="main">
+    <div class="content">
 
-    <!-- ===== Overview ===== -->
     <div class="panel active" id="panel-overview">
       <h1 class="page-title">系统概览</h1>
       <p class="page-subtitle">设备状态与基本信息</p>
       <div class="card">
-        <div class="card-header">📡 设备信息</div>
+        <div class="card-header">设备信息</div>
         <div class="card-body">
           <div class="overview-grid">
             <div class="overview-item"><div class="label">Device IP</div><div class="value" id="ovIp">%IP%</div></div>
@@ -231,18 +194,19 @@ const char* htmlPage = R"rawliteral(
         </div>
       </div>
       <div class="card">
-        <div class="card-header">⚙ 配置状态</div>
+        <div class="card-header">配置状态</div>
         <div class="card-body">
           <table class="info-table">
             <tr><td>模组状态</td><td id="cfgModem">%MODEM_CHECK%</td></tr>
             <tr><td>邮件通知</td><td id="cfgEmail">%SMTP_CHECK%</td></tr>
             <tr><td>推送通道</td><td id="cfgPush">%PUSH_COUNT% 个已启用</td></tr>
+            <tr><td>数据模式</td><td id="cfgData">%DATA_MODE%</td></tr>
             <tr><td>管理员号码</td><td>%ADMIN_PHONE%</td></tr>
           </table>
         </div>
       </div>
       <div class="card">
-        <div class="card-header">🔄 系统控制</div>
+        <div class="card-header">系统控制</div>
         <div class="card-body">
           <button class="btn btn-danger" onclick="systemRestart()">重启系统</button>
           <p class="form-hint">重启整个设备（ESP32 + 模组），期间无法接收短信和访问网页，约需 1 分钟恢复</p>
@@ -251,13 +215,12 @@ const char* htmlPage = R"rawliteral(
       </div>
     </div>
 
-    <!-- ===== Account ===== -->
     <div class="panel" id="panel-account">
       <h1 class="page-title">账号管理</h1>
       <p class="page-subtitle">修改 Web 管理界面的登录凭据</p>
       <form action="/save" method="POST" id="mainForm">
       <div class="card">
-        <div class="card-header">🔐 登录凭据</div>
+        <div class="card-header">登录凭据</div>
         <div class="card-body">
           <div class="form-warning">首次使用请立即修改默认密码！默认: )rawliteral" DEFAULT_WEB_USER " / " DEFAULT_WEB_PASS R"rawliteral(</div>
           <div class="form-row">
@@ -270,13 +233,12 @@ const char* htmlPage = R"rawliteral(
       </form>
     </div>
 
-    <!-- ===== Email ===== -->
     <div class="panel" id="panel-email">
       <h1 class="page-title">邮件通知</h1>
       <p class="page-subtitle">配置 SMTP 服务器以接收短信邮件通知</p>
       <form action="/save" method="POST" id="mainForm2">
       <div class="card">
-        <div class="card-header">📧 SMTP 设置</div>
+        <div class="card-header">SMTP 设置</div>
         <div class="card-body">
           <div class="form-row">
             <div class="form-group"><label class="form-label">SMTP 服务器</label><input class="form-input" type="text" name="smtpServer" value="%SMTP_SERVER%" placeholder="smtp.qq.com"></div>
@@ -293,13 +255,12 @@ const char* htmlPage = R"rawliteral(
       </form>
     </div>
 
-    <!-- ===== Push Channels ===== -->
     <div class="panel" id="panel-push">
       <h1 class="page-title">推送通道</h1>
       <p class="page-subtitle">最多 5 个独立推送通道，支持 POST JSON、Bark、钉钉、飞书、PushPlus、Server酱、Gotify、Telegram</p>
       <form action="/save" method="POST" id="mainForm3">
       <div class="card">
-        <div class="card-header">🔗 通道配置</div>
+        <div class="card-header">通道配置</div>
         <div class="card-body">
           %PUSH_CHANNELS%
         </div>
@@ -308,13 +269,12 @@ const char* htmlPage = R"rawliteral(
       </form>
     </div>
 
-    <!-- ===== Admin & Blacklist ===== -->
     <div class="panel" id="panel-admin">
       <h1 class="page-title">管理员 &amp; 黑名单</h1>
       <p class="page-subtitle">远程控制权限与短信过滤</p>
       <form action="/save" method="POST" id="mainForm4">
       <div class="card">
-        <div class="card-header">👤 管理员手机号</div>
+        <div class="card-header">管理员手机号</div>
         <div class="card-body">
           <div class="form-group">
             <input class="form-input" type="text" name="adminPhone" value="%ADMIN_PHONE%" placeholder="13800138000">
@@ -323,7 +283,7 @@ const char* htmlPage = R"rawliteral(
         </div>
       </div>
       <div class="card">
-        <div class="card-header">🚫 号码黑名单</div>
+        <div class="card-header">号码黑名单</div>
         <div class="card-body">
           <div class="form-group">
             <textarea class="form-textarea" name="numberBlackList" rows="5" placeholder="每行一个号码">%NUMBER_BLACK_LIST%</textarea>
@@ -335,28 +295,26 @@ const char* htmlPage = R"rawliteral(
       </form>
     </div>
 
-    <!-- ===== Send SMS ===== -->
     <div class="panel" id="panel-sendsms">
       <h1 class="page-title">发送短信</h1>
       <p class="page-subtitle">通过模组直接发送短信</p>
       <div class="card">
-        <div class="card-header">📤 新建短信</div>
+        <div class="card-header">新建短信</div>
         <div class="card-body">
           <form action="/sendsms" method="POST" target="_self">
             <div class="form-group"><label class="form-label">目标号码</label><input class="form-input" type="text" name="phone" placeholder="13800138000" required></div>
             <div class="form-group"><label class="form-label">短信内容</label><textarea class="form-textarea" name="content" placeholder="输入短信内容..." required oninput="updateCount(this)"></textarea><p class="form-hint">已输入 <span id="charCount">0</span> 字符</p></div>
-            <button type="submit" class="btn btn-primary" style="padding:9px 18px;">发送短信</button>
+            <button type="submit" class="btn btn-primary" style="padding:10px 22px;">发送短信</button>
           </form>
         </div>
       </div>
     </div>
 
-    <!-- ===== Diagnostics ===== -->
     <div class="panel" id="panel-diagnose">
       <h1 class="page-title">模组诊断</h1>
       <p class="page-subtitle">查询模组状态、SIM 卡与网络信息</p>
       <div class="card">
-        <div class="card-header">📊 查询</div>
+        <div class="card-header">查询</div>
         <div class="card-body">
           <div class="btn-row"><button class="btn btn-secondary" onclick="queryInfo('ati')">固件信息</button><button class="btn btn-secondary" onclick="queryInfo('signal')">信号质量</button></div>
           <div class="btn-row"><button class="btn btn-secondary" onclick="queryInfo('siminfo')">SIM 卡信息</button><button class="btn btn-secondary" onclick="queryInfo('network')">网络状态</button><button class="btn btn-secondary" onclick="queryInfo('wifi')">WiFi 状态</button></div>
@@ -365,20 +323,19 @@ const char* htmlPage = R"rawliteral(
       </div>
     </div>
 
-    <!-- ===== Network Test ===== -->
     <div class="panel" id="panel-network">
       <h1 class="page-title">网络测试</h1>
       <p class="page-subtitle">通过模组数据连接测试网络连通性</p>
       <div class="card">
-        <div class="card-header">🌐 Ping</div>
+        <div class="card-header">Ping</div>
         <div class="card-body">
           <button class="btn btn-secondary" id="pingBtn" onclick="confirmPing()">Ping 8.8.8.8</button>
-          <p class="form-hint">通过模组执行 Ping，消耗极少流量</p>
+          <p class="form-hint">通过模组执行 Ping，会临时开启数据连接；"仅收短信模式"开启时此功能不可用</p>
           <div class="result-box" id="pingResult"></div>
         </div>
       </div>
       <div class="card">
-        <div class="card-header">📡 WiFi 控制</div>
+        <div class="card-header">WiFi 控制</div>
         <div class="card-body">
           <button class="btn btn-danger" onclick="wifiRestart()">重启 WiFi</button>
           <p class="form-hint">断开当前 WiFi 连接并重新连接</p>
@@ -387,12 +344,24 @@ const char* htmlPage = R"rawliteral(
       </div>
     </div>
 
-    <!-- ===== Modem Control ===== -->
     <div class="panel" id="panel-modem">
       <h1 class="page-title">模组控制</h1>
       <p class="page-subtitle">模组重启、飞行模式、信号查询等操作</p>
       <div class="card">
-        <div class="card-header">🔄 模组重启</div>
+        <div class="card-header">流量安全</div>
+        <div class="card-body">
+          <div class="toggle-row">
+            <div class="toggle-text">
+              <div class="toggle-title">仅收短信模式</div>
+              <p class="form-hint">开启后锁定模组数据连接（开机及注册网络后自动去激活数据承载），收发短信不受影响。短信转发走的家中 WiFi，不消耗 SIM 流量；开启期间"网络测试"中的 Ping 将被禁用。适合境外漫游卡，避免数据漫游扣费。</p>
+            </div>
+            <input type="checkbox" id="dataLock" %SMS_ONLY_CHECKED% onchange="toggleDataLock(this)">
+          </div>
+          <div class="result-box" id="dataLockResult"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">模组重启</div>
         <div class="card-body">
           <div class="btn-row"><button class="btn btn-danger" onclick="modemAction('restart')">软重启 (AT+CFUN)</button><button class="btn btn-danger" onclick="modemAction('hardreset')">硬重启 (EN引脚)</button></div>
           <p class="form-hint">软重启发送 AT+CFUN=1,1 指令（15s 超时）；硬重启通过 EN 引脚断电后重新上电</p>
@@ -400,14 +369,14 @@ const char* htmlPage = R"rawliteral(
         </div>
       </div>
       <div class="card">
-        <div class="card-header">📶 信号查询</div>
+        <div class="card-header">信号查询</div>
         <div class="card-body">
           <div class="btn-row"><button class="btn btn-primary" onclick="modemAction('signal')">查询信号强度</button><button class="btn btn-primary" onclick="modemAction('operator')">查询运营商</button><button class="btn btn-primary" onclick="modemAction('imei')">查询 IMEI</button></div>
           <div class="result-box" id="modemQueryResult"></div>
         </div>
       </div>
       <div class="card">
-        <div class="card-header">✈ 飞行模式</div>
+        <div class="card-header">飞行模式</div>
         <div class="card-body">
           <div class="btn-row"><button class="btn btn-danger" id="flightBtn" onclick="toggleFlightMode()">切换飞行模式</button><button class="btn btn-secondary" onclick="queryFlightMode()">查询状态</button></div>
           <p class="form-hint">飞行模式开启后模组射频关闭，无法收发短信</p>
@@ -416,54 +385,52 @@ const char* htmlPage = R"rawliteral(
       </div>
     </div>
 
-    <!-- ===== AT Terminal ===== -->
     <div class="panel" id="panel-atterm">
       <h1 class="page-title">AT 指令终端</h1>
       <p class="page-subtitle">直接向模组发送 AT 指令并接收响应</p>
       <div class="card">
-        <div class="card-header">💻 终端</div>
+        <div class="card-header">终端</div>
         <div class="card-body">
-          <div id="atLog">就绪 — 输入 AT 指令开始调试</div>
+          <div class="console" id="atLog">就绪 — 输入 AT 指令开始调试</div>
           <div class="at-bar"><input class="form-input" type="text" id="atCmd" placeholder="AT+CSQ"><button class="btn btn-primary btn-sm" onclick="sendAT()" id="atBtn">发送</button></div>
-          <div class="btn-row" style="margin-top:8px;"><button class="btn btn-secondary btn-sm" onclick="clearATLog()">清空日志</button></div>
+          <div class="btn-row" style="margin-top:9px;"><button class="btn btn-secondary btn-sm" onclick="clearATLog()">清空日志</button></div>
           <p class="form-hint">直接向模组串口发送指令并接收响应，请谨慎操作</p>
         </div>
       </div>
     </div>
 
-    <!-- ===== System Log ===== -->
     <div class="panel" id="panel-log">
       <h1 class="page-title">系统日志</h1>
-      <p class="page-subtitle">实时查看设备串口日志输出 <span id="logStatus" style="color:#4CAF50;">● 自动刷新中</span></p>
+      <p class="page-subtitle">实时查看设备串口日志输出 <span id="logStatus" class="status-live">● 自动刷新中</span></p>
       <div class="card">
-        <div class="card-header">📋 日志输出</div>
+        <div class="card-header">日志输出</div>
         <div class="card-body">
-          <div id="logView" style="background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:8px;font-family:'Cascadia Code','Fira Code',Consolas,monospace;font-size:12px;line-height:1.6;max-height:60vh;overflow-y:auto;white-space:pre-wrap;word-break:break-all;min-height:300px;">加载中...</div>
-          <div class="btn-row" style="margin-top:8px;">
+          <div class="console" id="logView">加载中...</div>
+          <div class="btn-row" style="margin-top:9px;">
             <button class="btn btn-secondary btn-sm" onclick="clearLogUI()">清空显示</button>
             <button class="btn btn-secondary btn-sm" onclick="refreshLog()">手动刷新</button>
-            <label style="margin-left:8px;font-size:13px;cursor:pointer;"><input type="checkbox" id="logAuto" checked onchange="toggleLogAuto()"> 自动刷新</label>
+            <label style="margin-left:8px;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;"><input type="checkbox" id="logAuto" checked onchange="toggleLogAuto()"> 自动刷新</label>
           </div>
           <p class="form-hint">显示设备运行时输出的日志信息，每2秒自动刷新。日志最多保留最近120条。</p>
         </div>
       </div>
     </div>
 
+    </div>
   </main>
 
   <script>
-    // ---- Panel switching ----
     function switchPanel(name) {
       document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('active'); });
       document.getElementById('panel-' + name).classList.add('active');
       document.querySelectorAll('.sidebar-nav a').forEach(function(a) { a.classList.remove('active'); });
       document.querySelector('.sidebar-nav a[data-panel="' + name + '"]').classList.add('active');
+      window.scrollTo({top: 0, behavior: 'smooth'});
     }
     document.querySelectorAll('.sidebar-nav a').forEach(function(a) {
       a.addEventListener('click', function() { switchPanel(this.dataset.panel); });
     });
 
-    // ---- Push Channel JS ----
     function toggleChannel(idx) {
       var ch = document.getElementById('channel' + idx);
       var cb = document.getElementById('push' + idx + 'en');
@@ -475,8 +442,7 @@ const char* htmlPage = R"rawliteral(
       var extra = document.getElementById('extra' + idx);
       var custom = document.getElementById('custom' + idx);
       var type = parseInt(sel.value);
-      // 按平台预填官方默认接口地址
-      // 替换规则：字段为空、或当前值恰好是某平台默认地址时才更新；用户手输的自定义地址不动
+      // 按平台预填官方默认接口地址；字段为空或恰为某平台默认地址时才更新，用户手输的自定义地址不动
       var urlInput = document.getElementById('url' + idx);
       if (urlInput) {
         var defUrls = {4:'https://oapi.dingtalk.com/robot/send',5:'http://www.pushplus.plus/send',8:'https://open.feishu.cn/open-apis/bot/v2/hook/',10:'https://api.telegram.org'};
@@ -509,10 +475,8 @@ const char* htmlPage = R"rawliteral(
       for (var i = 0; i < 5; i++) { toggleChannel(i); updateTypeHint(i); }
     });
 
-    // ---- Send SMS ----
     function updateCount(el) { document.getElementById('charCount').textContent = el.value.length; }
 
-    // ---- Query ----
     function queryInfo(type) {
       var r = document.getElementById('queryResult');
       r.className = 'result-box result-loading'; r.textContent = '查询中...';
@@ -522,7 +486,6 @@ const char* htmlPage = R"rawliteral(
       }).catch(function(e){r.className='result-box result-error';r.textContent='请求失败: '+e;});
     }
 
-    // ---- Ping ----
     function confirmPing(){if(confirm('确定要执行 Ping 吗？将消耗少量流量。'))doPing();}
     function doPing(){
       var b=document.getElementById('pingBtn'),r=document.getElementById('pingResult');
@@ -535,7 +498,6 @@ const char* htmlPage = R"rawliteral(
       }).catch(function(e){b.disabled=false;b.textContent='Ping 8.8.8.8';r.className='result-box result-error';r.textContent='请求失败: '+e;});
     }
 
-    // ---- System Control ----
     var sysReloadTimer = null;
     function scheduleSysReload(){
       if (sysReloadTimer) return;
@@ -555,12 +517,10 @@ const char* htmlPage = R"rawliteral(
       fetch('/system?action=restart').then(function(rr){return rr.json()}).then(function(d){
         scheduleSysReload();
       }).catch(function(e){
-        // 重启导致连接中断属正常现象
         scheduleSysReload();
       });
     }
 
-    // ---- WiFi Control ----
     function wifiRestart(){
       if(!confirm('确定要重启WiFi吗？网页将暂时不可用。'))return;
       var r=document.getElementById('wifiResult');
@@ -571,7 +531,6 @@ const char* htmlPage = R"rawliteral(
       }).catch(function(e){r.className='result-box result-error';r.textContent='请求失败: '+e;});
     }
 
-    // ---- Flight Mode ----
     function queryFlightMode(){
       var r=document.getElementById('flightResult');
       r.className='result-box result-loading';r.textContent='查询中...';
@@ -591,7 +550,29 @@ const char* htmlPage = R"rawliteral(
       }).catch(function(e){b.disabled=false;r.className='result-box result-error';r.textContent='请求失败: '+e;});
     }
 
-    // ---- Modem Control ----
+    function toggleDataLock(cb){
+      var r=document.getElementById('dataLockResult');
+      var want=cb.checked?'on':'off';
+      cb.disabled=true;
+      r.className='result-box result-loading';
+      r.textContent=want==='on'?'正在锁定数据连接...':'正在解锁数据连接...';
+      fetch('/datalock?lock='+want).then(function(rr){return rr.json()}).then(function(d){
+        cb.disabled=false;
+        if(d.success){
+          cb.checked=d.smsOnly;
+          r.className='result-box result-success';r.textContent=d.message;
+          var cfg=document.getElementById('cfgData');
+          if(cfg) cfg.textContent=d.smsOnly?'仅收短信（数据已锁定）':'标准（数据未锁定）';
+        }else{
+          cb.checked=!cb.checked;
+          r.className='result-box result-error';r.textContent=d.message||'操作失败';
+        }
+      }).catch(function(e){
+        cb.disabled=false;cb.checked=!cb.checked;
+        r.className='result-box result-error';r.textContent='请求失败: '+e;
+      });
+    }
+
     function modemAction(action){
       var names={'restart':'软重启','hardreset':'硬重启','signal':'信号查询','operator':'运营商查询','imei':'IMEI查询'};
       var name=names[action]||action;
@@ -613,12 +594,11 @@ const char* htmlPage = R"rawliteral(
       }).catch(function(e){resultEl.className='result-box result-error';resultEl.textContent='请求失败: '+e;});
     }
 
-    // ---- AT Terminal ----
     function addLog(msg,type){
       type=type||'resp';var log=document.getElementById('atLog'),div=document.createElement('div'),b=document.createElement('b');
       if(type==='user'){b.style.color='#fff';b.textContent='> ';}
-      else if(type==='error'){b.style.color='#f44336';b.textContent='! ';}
-      else{b.style.color='#50e3c2';b.textContent='';}
+      else if(type==='error'){b.style.color='#ff6961';b.textContent='! ';}
+      else{b.style.color='#30d158';b.textContent='';}
       div.appendChild(b);div.appendChild(document.createTextNode(msg));
       log.appendChild(div);log.scrollTop=log.scrollHeight;
     }
@@ -633,7 +613,6 @@ const char* htmlPage = R"rawliteral(
     function clearATLog(){var l=document.getElementById('atLog');l.innerHTML='';addLog('日志已清空','resp');}
     document.getElementById('atCmd').addEventListener('keydown',function(e){if(e.key==='Enter')sendAT();});
 
-    // ---- Log Viewer ----
     var logTimer = null;
     function startLogPoll() {
       if (logTimer) return;

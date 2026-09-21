@@ -68,6 +68,7 @@ void setup() {
   server.on("/modem", handleModem);
   server.on("/wifi", handleWifi);
   server.on("/system", handleSystem);
+  server.on("/datalock", handleDataLock);
   server.begin();
   logCaptureLn(String("HTTP服务器已启动"));
 

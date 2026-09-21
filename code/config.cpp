@@ -13,6 +13,7 @@ void saveConfig() {
   preferences.putString("webUser", config.webUser);
   preferences.putString("webPass", config.webPass);
   preferences.putString("numBlkList", config.numberBlackList);
+  preferences.putBool("smsOnly", config.smsOnly);
   
   // 保存推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
@@ -42,6 +43,8 @@ void loadConfig() {
   config.webUser = preferences.getString("webUser", DEFAULT_WEB_USER);
   config.webPass = preferences.getString("webPass", DEFAULT_WEB_PASS);
   config.numberBlackList = preferences.getString("numBlkList", "");
+  // 默认开启：仅收短信不消耗流量，适合漫游卡；老用户升级后可在“模组控制”页解锁
+  config.smsOnly = preferences.getBool("smsOnly", true);
   
   // 加载推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {

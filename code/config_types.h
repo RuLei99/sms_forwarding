@@ -44,6 +44,7 @@ struct Config {
   String webUser;      // Web管理账号
   String webPass;      // Web管理密码
   String numberBlackList;  // 号码黑名单（换行符分隔）
+  bool smsOnly;        // 仅收短信模式：锁定模组数据连接（去激活PDP），Ping被禁用，防止漫游流量扣费
 };
 
 // 默认Web管理账号密码

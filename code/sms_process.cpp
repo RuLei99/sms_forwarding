@@ -1,9 +1,7 @@
 #include "sms_process.h"
 #include "web_handlers.h"
 #include "modem.h"
-#include "web_handlers.h"
 #include "push.h"
-#include "web_handlers.h"
 
 // 初始化长短信缓存
 void initConcatBuffer() {
@@ -126,19 +124,28 @@ void checkConcatTimeout() {
 String readSerialLine(HardwareSerial& port) {
   static char lineBuf[SERIAL_BUFFER_SIZE];
   static int linePos = 0;
+  static bool overflow = false;
 
   while (port.available()) {
     char c = port.read();
     if (c == '\n') {
-      lineBuf[linePos] = 0;
-      String res = String(lineBuf);
+      String res;
+      if (overflow) {
+        // 丢弃整条超长行：半截内容若被当作 PDU 解析，可能拼出错误短信
+        overflow = false;
+        res = "<LINE_OVERFLOW_DROPPED>";
+      } else {
+        lineBuf[linePos] = 0;
+        res = String(lineBuf);
+      }
       linePos = 0;
       return res;
     } else if (c != '\r') {  // 跳过\r
-      if (linePos < SERIAL_BUFFER_SIZE - 1)
+      if (linePos < SERIAL_BUFFER_SIZE - 1) {
         lineBuf[linePos++] = c;
-      else
-        linePos = 0;  //超长报错保护，重头计
+      } else {
+        overflow = true;  // 缓冲已满：停止写入，丢弃本行剩余内容直到换行
+      }
     }
   }
   return "";
