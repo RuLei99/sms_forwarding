@@ -7,17 +7,17 @@
 #include <base64.h>
 #include <sys/time.h>
 
-// 发送邮件通知函数（带重试）
-void sendEmailNotification(const char* subject, const char* body) {
-  if (config.smtpServer.length() == 0 || config.smtpUser.length() == 0 || 
+// 发送邮件通知函数（带重试）。返回是否最终成功
+bool sendEmailNotification(const char* subject, const char* body) {
+  if (config.smtpServer.length() == 0 || config.smtpUser.length() == 0 ||
       config.smtpPass.length() == 0 || config.smtpSendTo.length() == 0) {
     logCaptureLn(String("邮件配置不完整，跳过发送"));
-    return;
+    return false;
   }
 
   if (WiFi.status() != WL_CONNECTED) {
     logCaptureLn(String("WiFi未连接，跳过邮件发送"));
-    return;
+    return false;
   }
 
   auto statusCallback = [](SMTPStatus status) {
@@ -43,7 +43,7 @@ void sendEmailNotification(const char* subject, const char* body) {
       // 认证失败属配置错误，重试无意义
       logCaptureLn(String("邮件认证失败（请检查账号与SMTP授权码），停止重试"));
       smtp.stop();
-      return;
+      return false;
     }
 
     SMTPMessage msg;
@@ -58,13 +58,14 @@ void sendEmailNotification(const char* subject, const char* body) {
     if (smtp.send(msg)) {
       logCaptureF("[邮件] 发送成功（第 %d/%d 次尝试）\n", attempt, MAX_ATTEMPTS);
       smtp.stop();
-      return;
+      return true;
     }
     logCaptureLn(String("邮件发送失败"));
   }
 
   logCaptureLn(String("邮件多次重试后仍失败，本次通知已丢弃"));
   smtp.stop();
+  return false;
 }
 
 // URL编码辅助函数
@@ -198,14 +199,14 @@ static bool executeChannelRequest(const PushChannel& channel, const String& url,
 }
 
 // 发送单个推送通道（统一构建请求参数，由 executeChannelRequest 执行并自动重试）
-void sendToChannel(const PushChannel& channel, const char* sender, const char* message, const char* timestamp) {
-  if (!channel.enabled) return;
+bool sendToChannel(const PushChannel& channel, const char* sender, const char* message, const char* timestamp) {
+  if (!channel.enabled) return false;
 
   // 对于某些推送方式，URL可以为空（使用默认URL）
   bool needUrl = (channel.type == PUSH_TYPE_POST_JSON || channel.type == PUSH_TYPE_BARK ||
                   channel.type == PUSH_TYPE_GET || channel.type == PUSH_TYPE_DINGTALK ||
                   channel.type == PUSH_TYPE_CUSTOM);
-  if (needUrl && channel.url.length() == 0) return;
+  if (needUrl && channel.url.length() == 0) return false;
 
   String channelName = channel.name.length() > 0 ? channel.name : ("通道" + String(channel.type));
   logCaptureLn(String("发送到推送通道: " + channelName));
@@ -322,7 +323,7 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
       // 自定义模板
       if (channel.customBody.length() == 0) {
         logCaptureLn(String("自定义模板为空，跳过"));
-        return;
+        return false;
       }
       reqUrl = channel.url;
       reqBody = channel.customBody;
@@ -403,19 +404,19 @@ void sendToChannel(const PushChannel& channel, const char* sender, const char* m
 
     default:
       logCaptureLn(String("未知推送类型"));
-      return;
+      return false;
   }
 
-  executeChannelRequest(channel, reqUrl, useGet, reqContentType, reqBody, channelName);
+  return executeChannelRequest(channel, reqUrl, useGet, reqContentType, reqBody, channelName);
 }
 
-// 发送短信到所有启用的推送通道
-void sendSMSToServer(const char* sender, const char* message, const char* timestamp) {
+// 发送短信到所有启用的推送通道，返回位图（bit i = 通道 i+1 成功）
+uint8_t sendSMSToServer(const char* sender, const char* message, const char* timestamp) {
   if (WiFi.status() != WL_CONNECTED) {
     logCaptureLn(String("WiFi未连接，跳过推送"));
-    return;
+    return 0;
   }
-  
+
   bool hasEnabledChannel = false;
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     if (isPushChannelValid(config.pushChannels[i])) {
@@ -423,18 +424,22 @@ void sendSMSToServer(const char* sender, const char* message, const char* timest
       break;
     }
   }
-  
+
   if (!hasEnabledChannel) {
     logCaptureLn(String("没有启用的推送通道"));
-    return;
+    return 0;
   }
-  
+
+  uint8_t mask = 0;
   logCaptureLn(String("\n=== 开始多通道推送 ==="));
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     if (isPushChannelValid(config.pushChannels[i])) {
-      sendToChannel(config.pushChannels[i], sender, message, timestamp);
+      if (sendToChannel(config.pushChannels[i], sender, message, timestamp)) {
+        mask |= (1 << i);
+      }
       delay(100); // 短暂延迟避免请求过快
     }
   }
   logCaptureLn(String("=== 多通道推送完成 ===\n"));
+  return mask;
 }

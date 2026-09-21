@@ -4,6 +4,8 @@
 #include "modem.h"
 #include "push.h"
 #include "wifi_config.h"
+#include "records.h"
+#include "health.h"
 
 // ---- 日志环形缓冲区 ----
 String logBuffer[LOG_BUF_SIZE];
@@ -168,6 +170,7 @@ void handleRoot() {
     channelsHtml += "<div class=\"push-channel-header\">";
     channelsHtml += "<input type=\"checkbox\" name=\"push" + idx + "en\" id=\"push" + idx + "en\" onchange=\"toggleChannel(" + idx + ")\"" + checked + ">";
     channelsHtml += "<label for=\"push" + idx + "en\" class=\"label-inline\">启用推送通道 " + String(i + 1) + "</label>";
+    channelsHtml += "<button type=\"button\" class=\"btn btn-sm btn-secondary ch-test\" onclick=\"testPush(" + idx + ")\" id=\"testBtn" + idx + "\">发送测试</button>";
     channelsHtml += "</div>";
     channelsHtml += "<div class=\"push-channel-body\">";
 
@@ -238,6 +241,9 @@ void handleRoot() {
     {"SMTP_SEND_TO", config.smtpSendTo},
     {"ADMIN_PHONE", config.adminPhone},
     {"NUMBER_BLACK_LIST", config.numberBlackList},
+    {"FILTER_KEYWORDS", config.filterKeywords},
+    {"FLT_WL_SEL", config.filterWhitelist ? " selected" : ""},
+    {"FLT_BL_SEL", config.filterWhitelist ? "" : " selected"},
     {"SMTP_CHECK", emailOk ? "已配置" : "未配置"},
     {"MODEM_CHECK", modemReady ? "已就绪" : "未就绪"},
     {"DATA_MODE", config.smsOnly ? "仅收短信（数据已锁定）" : "标准（数据未锁定）"},
@@ -990,6 +996,14 @@ void handleSave() {
     config.numberBlackList = server.arg("numberBlackList");
   }
 
+  // 关键词过滤表单：只在字段存在时更新
+  if (server.hasArg("filterKeywords")) {
+    config.filterKeywords = server.arg("filterKeywords");
+  }
+  if (server.hasArg("filterMode")) {
+    config.filterWhitelist = (server.arg("filterMode") == "whitelist");
+  }
+
   // 推送通道配置：只在对应通道的字段存在时更新
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     String idx = String(i);
@@ -1019,42 +1033,13 @@ void handleSave() {
   
   saveConfig();
   configValid = isConfigValid();
-  
-  String html = R"rawliteral(
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="refresh" content="3;url=/">
-  <title>保存成功</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Roboto, Arial, sans-serif;
-      min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      -webkit-font-smoothing: antialiased;
-    }
-    .result {
-      background: rgba(255,255,255,0.72);
-      -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
-      border: 1px solid rgba(0,0,0,0.06);
-      border-radius: 18px; padding: 36px 44px; text-align: center; max-width: 380px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.08);
-    }
-    h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; color: #1d7a36; margin-bottom: 6px; }
-    p { font-size: 13px; color: #6e6e73; margin-bottom: 4px; }
-  </style>
-</head>
-<body>
-  <div class="result">
-    <h2>配置保存成功</h2>
-    <p>3秒后返回配置页面...</p>
-    <p>如果修改了账号密码，请使用新的账号密码登录</p>
-  </div>
-</body>
-</html>
-)rawliteral";
-  server.send(200, "text/html", html);
+
+  // JSON 响应（前端 fetch 提交，行内反馈）
+  String msg = "配置已保存";
+  if (server.hasArg("webPass")) msg += "；账号密码已更新，下次登录请使用新凭据";
+  if (!configValid) msg += "；提醒：邮件与推送通道均未配置，短信暂无法转发";
+  String json = "{\"success\":true,\"message\":\"" + jsonEscape(msg) + "\"}";
+  server.send(200, "application/json", json);
   
   // 如果配置有效，发送启动通知
   if (configValid) {
@@ -1265,6 +1250,84 @@ void handleDataLock() {
   json += "\"success\":true,";
   json += "\"smsOnly\":" + String(config.smsOnly ? "true" : "false") + ",";
   json += "\"message\":\"" + String(config.smsOnly ? "仅收短信模式已开启，数据连接已锁定" : "仅收短信模式已关闭，Ping 可用") + "\"";
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+// 概览页轻量状态（自动刷新用，只读缓存，不碰模组串口）
+void handleStatus() {
+  if (!checkAuth()) return;
+
+  bool emailOk = config.smtpServer.length() > 0 && config.smtpUser.length() > 0 &&
+                 config.smtpPass.length() > 0 && config.smtpSendTo.length() > 0;
+  int pushCount = 0;
+  for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
+    if (config.pushChannels[i].enabled) pushCount++;
+  }
+  long up = millis() / 1000;
+  char upBuf[16];
+  snprintf(upBuf, sizeof(upBuf), "%ld:%02ld:%02ld", up / 3600, (up % 3600) / 60, up % 60);
+
+  String json = "{";
+  json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+  json += "\"ssid\":\"" + jsonEscape(String(WiFi.SSID())) + "\",";
+  json += "\"heap\":" + String(ESP.getFreeHeap() / 1024) + ",";
+  json += "\"uptime\":\"" + String(upBuf) + "\",";
+  json += "\"modem\":" + String(modemReady ? "true" : "false") + ",";
+  json += "\"signal\":\"" + jsonEscape(modemSignalCache) + "\",";
+  json += "\"smsOnly\":" + String(config.smsOnly ? "true" : "false") + ",";
+  json += "\"email\":" + String(emailOk ? "true" : "false") + ",";
+  json += "\"push\":" + String(pushCount);
+  json += "}";
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.send(200, "application/json", json);
+}
+
+// 短信记录查询（?clear=1 清空）
+void handleSmsLog() {
+  if (!checkAuth()) return;
+
+  if (server.arg("clear") == "1") {
+    recordsClear();
+    logCaptureLn(String("网页端清空了短信记录"));
+    server.send(200, "application/json", "{\"total\":0,\"items\":[]}");
+    return;
+  }
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.send(200, "application/json", recordsJson());
+}
+
+// 推送通道测试（走 WiFi，不占用模组串口）
+void handleTestPush() {
+  if (!checkAuth()) return;
+
+  int ch = server.arg("ch").toInt();
+  bool ok = false;
+  String message;
+
+  if (ch < 0 || ch >= MAX_PUSH_CHANNELS) {
+    message = "无效的通道编号";
+  } else if (!isPushChannelValid(config.pushChannels[ch])) {
+    message = "通道未启用或配置不完整，请先填写并保存";
+  } else {
+    // 测试时间戳
+    String ts = "";
+    time_t now = time(nullptr);
+    if (now > 100000) {
+      struct tm ti;
+      gmtime_r(&now, &ti);
+      char b[24];
+      strftime(b, sizeof(b), "%Y-%m-%d %H:%M:%S UTC", &ti);
+      ts = b;
+    }
+    ok = sendToChannel(config.pushChannels[ch], "测试",
+                       "这是一条来自 Web 管理页的测试推送", ts.c_str());
+    message = ok ? "测试推送已发出，请到对应平台查收" : "测试推送失败，请到系统日志查看原因";
+  }
+
+  String json = "{";
+  json += "\"success\":" + String(ok ? "true" : "false") + ",";
+  json += "\"message\":\"" + jsonEscape(message) + "\"";
   json += "}";
   server.send(200, "application/json", json);
 }

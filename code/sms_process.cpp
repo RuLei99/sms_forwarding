@@ -2,6 +2,28 @@
 #include "web_handlers.h"
 #include "modem.h"
 #include "push.h"
+#include "records.h"
+
+// 关键词过滤：返回 true 表示该短信应被拦截
+static bool blockedByKeywordFilter(const char* text) {
+  if (config.filterKeywords.length() == 0) return false;
+
+  String content = String(text);
+  // 逐行取关键词判断命中
+  int listLen = (int)config.filterKeywords.length();
+  bool hit = false;
+  int start = 0;
+  while (start <= listLen && !hit) {
+    int end = config.filterKeywords.indexOf('\n', start);
+    if (end == -1) end = listLen;
+    String kw = config.filterKeywords.substring(start, end);
+    kw.trim();
+    if (kw.length() > 0 && content.indexOf(kw) >= 0) hit = true;
+    start = end + 1;
+  }
+  // 白名单模式：命中才转发（未命中=拦截）；黑名单模式：命中即拦截
+  return config.filterWhitelist ? !hit : hit;
+}
 
 // 初始化长短信缓存
 void initConcatBuffer() {
@@ -282,12 +304,12 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
     return;
   }
 
-  // 检查是否为管理员命令
+  // 检查是否为管理员命令（管理员命令不受关键词过滤影响）
   if (isAdmin(sender)) {
     logCaptureLn(String("收到管理员短信，检查命令..."));
     String smsText = String(text);
     smsText.trim();
-    
+
     // 检查是否为命令格式
     if (smsText.startsWith("SMS:") || smsText.equals("RESET")) {
       processAdminCommand(sender, text);
@@ -296,12 +318,27 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
     }
   }
 
-  // 发送通知http（推送到所有启用的通道）
-  sendSMSToServer(sender, text, timestamp);
+  // 关键词过滤（白名单/黑名单模式）
+  if (blockedByKeywordFilter(text)) {
+    logCaptureLn(String(config.filterWhitelist
+      ? "短信未命中白名单关键词，不转发"
+      : "短信命中黑名单关键词，不转发"));
+    return;
+  }
+
+  // 发送通知http（推送到所有启用的通道），位图记录各通道结果
+  uint8_t pushMask = sendSMSToServer(sender, text, timestamp);
+  uint8_t pushEnabled = 0;
+  for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
+    if (isPushChannelValid(config.pushChannels[i])) pushEnabled |= (1 << i);
+  }
   // 发送通知邮件
   String subject = ""; subject+="短信";subject+=sender;subject+=",";subject+=text;
   String body = ""; body+="来自：";body+=sender;body+="，时间：";body+=timestamp;body+="，内容：";body+=text;
-  sendEmailNotification(subject.c_str(), body.c_str());
+  bool emailOk = sendEmailNotification(subject.c_str(), body.c_str());
+
+  // 落一条转发记录（含各通道结果）
+  recordsAdd(sender, text, timestamp, emailOk, pushMask, pushEnabled);
 }
 
 // 处理URC和PDU

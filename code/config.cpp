@@ -14,6 +14,8 @@ void saveConfig() {
   preferences.putString("webPass", config.webPass);
   preferences.putString("numBlkList", config.numberBlackList);
   preferences.putBool("smsOnly", config.smsOnly);
+  preferences.putBool("fltWL", config.filterWhitelist);
+  preferences.putString("fltKw", config.filterKeywords);
   
   // 保存推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
@@ -45,6 +47,8 @@ void loadConfig() {
   config.numberBlackList = preferences.getString("numBlkList", "");
   // 默认开启：仅收短信不消耗流量，适合漫游卡；老用户升级后可在“模组控制”页解锁
   config.smsOnly = preferences.getBool("smsOnly", true);
+  config.filterWhitelist = preferences.getBool("fltWL", false);
+  config.filterKeywords = preferences.getString("fltKw", "");
   
   // 加载推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {

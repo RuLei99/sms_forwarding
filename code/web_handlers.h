@@ -29,5 +29,8 @@ void handleModem();
 void handleWifi();
 void handleSystem();
 void handleDataLock();
+void handleStatus();     // 概览页轻量状态 JSON（自动刷新用）
+void handleSmsLog();     // 短信记录查询/清空
+void handleTestPush();   // 推送通道测试
 
 #endif

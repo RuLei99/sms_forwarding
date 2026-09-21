@@ -44,6 +44,10 @@ const char* htmlPage = R"rawliteral(
     .page-subtitle{font-size:14px;color:var(--mute);margin-bottom:28px}
     .status-live{color:#248a3d;font-weight:500;animation:pulse 2.2s ease-in-out infinite}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+    .status-banner{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:600;margin-bottom:24px;padding:12px 16px;border-radius:var(--radius-md);background:rgba(52,199,89,.12);color:#1d7a36}
+    .status-banner .dot{width:9px;height:9px;border-radius:50%;background:currentColor;animation:pulse 2.2s infinite}
+    .status-banner.warn{background:rgba(255,149,0,.12);color:#92400e}
+    .status-banner.err{background:rgba(255,59,48,.1);color:#c0271d}
     .card{background:var(--glass);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border:1px solid rgba(0,0,0,.05);border-radius:var(--radius);box-shadow:var(--shadow-card);margin-bottom:16px}
     .card-header{padding:18px 22px 0;font-size:14px;font-weight:600;letter-spacing:-.01em}
     .card-body{padding:15px 22px 22px}
@@ -109,6 +113,19 @@ const char* htmlPage = R"rawliteral(
     .overview-item{background:#fff;border:1px solid #e8e8ed;border-radius:var(--radius-md);padding:14px 16px}
     .overview-item .label{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;font-weight:500;margin-bottom:4px}
     .overview-item .value{font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;word-break:break-all}
+    .sms-row{display:flex;gap:12px;padding:13px 0;border-bottom:1px solid rgba(0,0,0,.045)}
+    .sms-row:last-child{border-bottom:none}
+    .sms-avatar{width:36px;height:36px;border-radius:50%;background:#e8e8ed;color:#6e6e73;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .sms-main{flex:1;min-width:0}
+    .sms-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+    .sms-head b{font-size:13px;font-weight:600}
+    .sms-time{color:var(--faint);font-size:11px;white-space:nowrap}
+    .sms-text{font-size:13px;margin-top:2px;white-space:pre-wrap;word-break:break-word}
+    .sms-meta{font-size:11px;margin-top:5px;color:var(--faint)}
+    .m-ok{color:#1d7a36}
+    .m-no{color:#c0271d}
+    .sms-empty{padding:36px 0;text-align:center;color:var(--faint);font-size:13px}
+    .ch-test{margin-left:auto}
     .btn-row{display:flex;gap:8px;flex-wrap:wrap}
     .btn-row .btn{flex:1;min-width:96px}
     .btn-row+.btn-row{margin-top:9px}
@@ -148,6 +165,7 @@ const char* htmlPage = R"rawliteral(
     <symbol id="ir" viewBox="0 0 24 24"><path d="M8.6 15.4a4.8 4.8 0 010-6.8M15.4 8.6a4.8 4.8 0 010 6.8M5.8 18.2a8.8 8.8 0 010-12.4M18.2 5.8a8.8 8.8 0 010 12.4"/></symbol>
     <symbol id="it" viewBox="0 0 24 24"><path d="M5 8l4 4-4 4M12.5 16.5H19"/></symbol>
     <symbol id="il" viewBox="0 0 24 24"><path d="M8.5 6.5h11M8.5 12h11M8.5 17.5h11M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01"/></symbol>
+    <symbol id="ii" viewBox="0 0 24 24"><path d="M12 4.5c-4.5 0-8 2.8-8 6.3 0 2 1.1 3.8 2.9 5-.1 1-.5 1.9-1.2 2.6 1.4-.1 2.7-.6 3.7-1.3.8.2 1.7.3 2.6.3 4.5 0 8-2.8 8-6.3s-3.5-6.6-8-6.6z"/></symbol>
   </svg>
 
   <aside class="sidebar">
@@ -158,6 +176,7 @@ const char* htmlPage = R"rawliteral(
     <nav class="sidebar-nav">
       <div class="sidebar-section-label">配置</div>
       <a data-panel="overview" class="active"><svg class="ico"><use href="#ig"/></svg><span class="txt">系统概览</span></a>
+      <a data-panel="inbox"><svg class="ico"><use href="#ii"/></svg><span class="txt">短信记录</span></a>
       <a data-panel="account"><svg class="ico"><use href="#iu"/></svg><span class="txt">账号管理</span></a>
       <a data-panel="email"><svg class="ico"><use href="#im"/></svg><span class="txt">邮件通知</span></a>
       <a data-panel="push"><svg class="ico"><use href="#ip"/></svg><span class="txt">推送通道</span></a>
@@ -182,6 +201,7 @@ const char* htmlPage = R"rawliteral(
     <div class="panel active" id="panel-overview">
       <h1 class="page-title">系统概览</h1>
       <p class="page-subtitle">设备状态与基本信息</p>
+      <div class="status-banner" id="stBanner"><span class="dot"></span><span id="stText">状态获取中...</span></div>
       <div class="card">
         <div class="card-header">设备信息</div>
         <div class="card-body">
@@ -190,6 +210,7 @@ const char* htmlPage = R"rawliteral(
             <div class="overview-item"><div class="label">WiFi SSID</div><div class="value" id="ovSsid">%WIFI_SSID%</div></div>
             <div class="overview-item"><div class="label">Free Heap</div><div class="value" id="ovHeap">%FREE_HEAP%</div></div>
             <div class="overview-item"><div class="label">Uptime</div><div class="value" id="ovUptime">%UPTIME%</div></div>
+            <div class="overview-item"><div class="label">Signal</div><div class="value" id="ovSignal">—</div></div>
           </div>
         </div>
       </div>
@@ -231,6 +252,21 @@ const char* htmlPage = R"rawliteral(
       </div>
       <button type="submit" class="btn btn-primary btn-block btn-save">保存配置</button>
       </form>
+    </div>
+
+    <div class="panel" id="panel-inbox">
+      <h1 class="page-title">短信记录</h1>
+      <p class="page-subtitle">最近 50 条收到的短信与转发结果 <span id="ibStatus" class="status-live">● 自动刷新中</span></p>
+      <div class="card">
+        <div class="card-body">
+          <div id="ibList"><div class="sms-empty">加载中...</div></div>
+          <div class="btn-row" style="margin-top:12px;">
+            <button class="btn btn-secondary btn-sm" onclick="refreshInbox()">手动刷新</button>
+            <button class="btn btn-secondary btn-sm" onclick="clearInbox()">清空记录</button>
+          </div>
+          <p class="form-hint">记录保存在内存中，设备重启后清空，不占用闪存寿命</p>
+        </div>
+      </div>
     </div>
 
     <div class="panel" id="panel-email">
@@ -289,6 +325,23 @@ const char* htmlPage = R"rawliteral(
             <textarea class="form-textarea" name="numberBlackList" rows="5" placeholder="每行一个号码">%NUMBER_BLACK_LIST%</textarea>
             <p class="form-hint">黑名单号码发来的短信将被自动忽略</p>
           </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">关键词过滤</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="form-group"><label class="form-label">过滤模式</label>
+              <select class="form-select" name="filterMode">
+                <option value="blacklist"%FLT_BL_SEL%>黑名单：命中关键词不转发</option>
+                <option value="whitelist"%FLT_WL_SEL%>白名单：仅转发命中关键词</option>
+              </select>
+            </div>
+            <div class="form-group"><label class="form-label">关键词（每行一个）</label>
+              <textarea class="form-textarea" name="filterKeywords" rows="4" placeholder="留空则不过滤">%FILTER_KEYWORDS%</textarea>
+            </div>
+          </div>
+          <p class="form-hint">先经过号码黑名单，再经过关键词过滤；管理员命令不受过滤影响</p>
         </div>
       </div>
       <button type="submit" class="btn btn-primary btn-block btn-save">保存配置</button>
@@ -426,10 +479,17 @@ const char* htmlPage = R"rawliteral(
       document.querySelectorAll('.sidebar-nav a').forEach(function(a) { a.classList.remove('active'); });
       document.querySelector('.sidebar-nav a[data-panel="' + name + '"]').classList.add('active');
       window.scrollTo({top: 0, behavior: 'smooth'});
+      if (location.hash.slice(1) !== name) location.hash = name;
     }
     document.querySelectorAll('.sidebar-nav a').forEach(function(a) {
       a.addEventListener('click', function() { switchPanel(this.dataset.panel); });
     });
+    // hash 路由：#push 直达面板，浏览器后退可用
+    function applyHash() {
+      var h = location.hash.slice(1);
+      if (h && document.getElementById('panel-' + h)) switchPanel(h);
+    }
+    window.addEventListener('hashchange', applyHash);
 
     function toggleChannel(idx) {
       var ch = document.getElementById('channel' + idx);
@@ -476,6 +536,113 @@ const char* htmlPage = R"rawliteral(
     });
 
     function updateCount(el) { document.getElementById('charCount').textContent = el.value.length; }
+
+    // ---- 推送通道测试 ----
+    function testPush(i){
+      var b=document.getElementById('testBtn'+i);
+      var ch=document.getElementById('channel'+i);
+      var rb=ch.querySelector('.test-result');
+      if(!rb){rb=document.createElement('div');rb.className='result-box test-result';ch.appendChild(rb);}
+      b.disabled=true;b.textContent='发送中...';
+      rb.classList.remove('result-loading','result-success','result-error');
+      rb.classList.add('result-loading');rb.textContent='正在发送测试推送...';
+      fetch('/testpush?ch='+i).then(function(r){return r.json()}).then(function(d){
+        b.disabled=false;b.textContent='发送测试';
+        rb.classList.remove('result-loading','result-success','result-error');
+        rb.classList.add(d.success?'result-success':'result-error');
+        rb.textContent=d.message;
+      }).catch(function(e){
+        b.disabled=false;b.textContent='发送测试';
+        rb.classList.remove('result-loading','result-success','result-error');
+        rb.classList.add('result-error');rb.textContent='请求失败: '+e;
+      });
+    }
+
+    // ---- 概览状态轮询（5 秒，仅概览面板可见时） ----
+    var statusTimer = null;
+    function applyStatus(d){
+      function set(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
+      set('ovIp',d.ip);set('ovSsid',d.ssid);set('ovHeap',d.heap+' KB');set('ovUptime',d.uptime);
+      set('ovSignal',d.signal||'—');
+      set('cfgModem',d.modem?'已就绪':'未就绪');
+      set('cfgEmail',d.email?'已配置':'未配置');
+      set('cfgPush',d.push+' 个已启用');
+      set('cfgData',d.smsOnly?'仅收短信（数据已锁定）':'标准（数据未锁定）');
+      var b=document.getElementById('stBanner'),t=document.getElementById('stText');
+      if(b&&t){
+        if(!d.modem){b.className='status-banner err';t.textContent='模组未就绪 — 短信暂停，后台自动重试中';}
+        else if(!d.email&&d.push===0){b.className='status-banner warn';t.textContent='转发未配置 — 请配置邮件或推送通道';}
+        else{b.className='status-banner';t.textContent='设备运行正常';}
+      }
+    }
+    function refreshStatus(){
+      fetch('/status').then(function(r){return r.json()}).then(applyStatus).catch(function(){});
+    }
+    function startStatusPoll(){ if(statusTimer)return; statusTimer=setInterval(refreshStatus,5000); }
+    function stopStatusPoll(){ if(statusTimer){clearInterval(statusTimer);statusTimer=null;} }
+
+    // ---- 短信记录 ----
+    var inboxTimer = null;
+    function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function refreshInbox(){
+      fetch('/smslog').then(function(r){return r.json()}).then(function(d){
+        var el=document.getElementById('ibList');
+        if(!d||!d.items||!d.items.length){
+          el.innerHTML='<div class="sms-empty">暂无记录 — 收到短信后会自动出现在这里</div>';
+          return;
+        }
+        var h='';
+        for(var i=0;i<d.items.length;i++){
+          var it=d.items[i];
+          var av=String(it.s).replace(/[^0-9A-Za-z\u4e00-\u9fa5]/g,'');av=av.slice(-3)||'?';
+          var meta='邮件 <span class="'+(it.e?'m-ok':'m-no')+'">'+(it.e?'成功':'未配置/失败')+'</span>';
+          if(it.en>0){
+            for(var c=0;c<5;c++){
+              if(it.en&(1<<c)){
+                var ok=it.p&(1<<c);
+                meta+=' · 通道'+(c+1)+' <span class="'+(ok?'m-ok':'m-no')+'">'+(ok?'成功':'失败')+'</span>';
+              }
+            }
+          }else{meta+=' · 未启用推送';}
+          h+='<div class="sms-row"><div class="sms-avatar">'+esc(av)+'</div>'
+            +'<div class="sms-main"><div class="sms-head"><b>'+esc(it.s)+'</b><span class="sms-time">'+esc(it.ts)+'</span></div>'
+            +'<div class="sms-text">'+esc(it.t)+'</div>'
+            +'<div class="sms-meta">'+meta+'</div></div></div>';
+        }
+        el.innerHTML=h;
+      }).catch(function(){});
+    }
+    function startInboxPoll(){ if(inboxTimer)return; inboxTimer=setInterval(refreshInbox,10000); }
+    function stopInboxPoll(){ if(inboxTimer){clearInterval(inboxTimer);inboxTimer=null;} }
+    function clearInbox(){
+      if(!confirm('确定清空所有短信记录？'))return;
+      fetch('/smslog?clear=1').then(function(){refreshInbox();});
+    }
+
+    // ---- 表单保存（fetch + 行内反馈，无页面跳转） ----
+    function setBoxState(rb, state, text){
+      rb.classList.remove('result-loading','result-success','result-error');
+      rb.classList.add(state);
+      rb.textContent=text;
+    }
+    document.querySelectorAll('form[action="/save"]').forEach(function(f){
+      f.addEventListener('submit', function(e){
+        e.preventDefault();
+        var btn=f.querySelector('.btn-save');
+        var rb=f.querySelector('.save-result');
+        if(!rb){rb=document.createElement('div');rb.className='result-box save-result';f.appendChild(rb);}
+        btn.disabled=true;btn.textContent='保存中，请稍候...';
+        setBoxState(rb,'result-loading','正在保存...');
+        fetch('/save',{method:'POST',body:new FormData(f)}).then(function(r){return r.json()}).then(function(d){
+          btn.disabled=false;btn.textContent='保存配置';
+          setBoxState(rb,d.success?'result-success':'result-error',d.message||'已保存');
+          refreshStatus();
+        }).catch(function(err){
+          btn.disabled=false;btn.textContent='保存配置';
+          setBoxState(rb,'result-error','请求失败: '+err);
+        });
+      });
+    });
 
     function queryInfo(type) {
       var r = document.getElementById('queryResult');
@@ -602,16 +769,34 @@ const char* htmlPage = R"rawliteral(
       div.appendChild(b);div.appendChild(document.createTextNode(msg));
       log.appendChild(div);log.scrollTop=log.scrollHeight;
     }
+    // ---- AT 指令历史（localStorage 最近 20 条，↑/↓ 翻阅） ----
+    var atHist=[];try{atHist=JSON.parse(localStorage.getItem('atHist')||'[]');}catch(e){atHist=[];}
+    var atIdx=atHist.length;
+    function pushATHist(cmd){
+      if(atHist[atHist.length-1]===cmd)return;
+      atHist.push(cmd);
+      if(atHist.length>20)atHist.shift();
+      atIdx=atHist.length;
+      try{localStorage.setItem('atHist',JSON.stringify(atHist));}catch(e){}
+    }
     function sendAT(){
       var inp=document.getElementById('atCmd'),cmd=inp.value.trim();if(!cmd)return;
       var btn=document.getElementById('atBtn');btn.disabled=true;btn.textContent='...';
-      addLog(cmd,'user');inp.value='';
+      addLog(cmd,'user');inp.value='';pushATHist(cmd);
       fetch('/at?cmd='+encodeURIComponent(cmd)).then(function(rr){return rr.json()}).then(function(d){
         addLog(d.message,d.success?'resp':'error');
       }).catch(function(e){addLog('网络错误: '+e,'error')}).finally(function(){btn.disabled=false;btn.textContent='发送';});
     }
     function clearATLog(){var l=document.getElementById('atLog');l.innerHTML='';addLog('日志已清空','resp');}
-    document.getElementById('atCmd').addEventListener('keydown',function(e){if(e.key==='Enter')sendAT();});
+    document.getElementById('atCmd').addEventListener('keydown',function(e){
+      if(e.key==='Enter'){sendAT();return;}
+      if(e.key==='ArrowUp'||e.key==='ArrowDown'){
+        if(!atHist.length)return;
+        e.preventDefault();
+        atIdx=e.key==='ArrowUp'?Math.max(0,atIdx-1):Math.min(atHist.length,atIdx+1);
+        this.value=atHist[atIdx]||'';
+      }
+    });
 
     var logTimer = null;
     function startLogPoll() {
@@ -637,10 +822,15 @@ const char* htmlPage = R"rawliteral(
     var _origSwitchPanel = switchPanel;
     switchPanel = function(name) {
       _origSwitchPanel(name);
-      if (name === 'log') { refreshLog(); startLogPoll(); }
-      else stopLogPoll();
+      if (name === 'log') { refreshLog(); startLogPoll(); } else stopLogPoll();
+      if (name === 'overview') { refreshStatus(); startStatusPoll(); } else stopStatusPoll();
+      if (name === 'inbox') { refreshInbox(); startInboxPoll(); } else stopInboxPoll();
     };
-    document.addEventListener('DOMContentLoaded', function() { refreshLog(); startLogPoll(); });
+    document.addEventListener('DOMContentLoaded', function() {
+      refreshLog(); startLogPoll();
+      refreshStatus(); startStatusPoll();
+      applyHash();  // 支持 #panel 直达
+    });
   </script>
 </body>
 </html>

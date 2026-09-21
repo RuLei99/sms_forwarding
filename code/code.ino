@@ -2,13 +2,10 @@
 #include "wifi_config.h"
 #include "config.h"
 #include "web_handlers.h"
-#include "web_handlers.h"
 #include "modem.h"
-#include "web_handlers.h"
 #include "push.h"
-#include "web_handlers.h"
 #include "sms_process.h"
-#include "web_handlers.h"
+#include "health.h"
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
@@ -16,8 +13,10 @@ void setup() {
   Serial.begin(115200);
   // 缩短初始化延时，WiFi连接会处理自己的超时
   delay(200);
+  // RX 缓冲必须在 begin 之前设置：转发推送/邮件期间 loop 阻塞可达数十秒，
+  // 500 字节缓冲会被并发到达的短信 PDU（约 340B/条）挤爆丢字节
+  Serial1.setRxBufferSize(2048);
   Serial1.begin(115200, SERIAL_8N1, RXD, TXD);
-  Serial1.setRxBufferSize(SERIAL_BUFFER_SIZE);
   while (Serial1.available()) Serial1.read();
   modemPowerCycle();
   while (Serial1.available()) Serial1.read();
@@ -69,8 +68,14 @@ void setup() {
   server.on("/wifi", handleWifi);
   server.on("/system", handleSystem);
   server.on("/datalock", handleDataLock);
+  server.on("/status", handleStatus);
+  server.on("/smslog", handleSmsLog);
+  server.on("/testpush", handleTestPush);
   server.begin();
   logCaptureLn(String("HTTP服务器已启动"));
+
+  // WiFi 断连/重连事件落日志（healthTask 消费）
+  healthInit();
 
   // ---- NTP 时间同步 ----
   logCaptureLn(String("正在同步NTP时间..."));
@@ -102,8 +107,10 @@ void setup() {
     sendEmailNotification(subject.c_str(), body.c_str());
   }
 
-  // ---- 模组初始化（较慢，但网页已可访问） ----
-  modemInit();
+  // ---- 模组初始化（较慢，但网页已可访问；失败不再死等，后台周期重试） ----
+  if (!modemInit()) {
+    logCaptureLn(String("⚠️ 模组初始化未完成，网页可用，后台每 2 分钟自动重试"));
+  }
 }
 
 void loop() {
@@ -117,4 +124,6 @@ void loop() {
   checkConcatTimeout();
   if (Serial.available()) Serial1.write(Serial.read());
   checkSerial1URC();
+  // 模组巡检 / 后台重初始化 / WiFi 事件日志 / 堆内存水位
+  healthTask();
 }

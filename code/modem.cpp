@@ -41,18 +41,40 @@ void modemPowerCycle() {
 }
 
 // 重启模组（EN引脚断电重启 + 重新初始化）
+// 内部占用 Serial1 期间会嵌套 server.handleClient()，必须持有 modemPortBusy，
+// 否则嵌套进来的请求会与初始化 AT 序列抢串口（setup/后台重试路径同样受益）
 void resetModule() {
+  modemPortBusy = true;
   logCaptureLn(String("正在硬重启模组（EN 断电重启）..."));
   modemPowerCycle();
   modemInit();
+  modemPortBusy = false;
 }
 
 // 模组 AT 初始化流程（setup 中调用，resetModule 后也调用）
-void modemInit() {
+// 返回是否初始化成功（网络已注册）。失败时置 modemReady=false，
+// 不再无限重试 —— 网页保持可用，后台由 healthTask 周期性重试
+static bool modemInitInner();  // 实际初始化流程（由 modemInit 包上串口互斥后调用）
+
+bool modemInit() {
+  // 初始化全程占用 Serial1（内部嵌套 handleClient），与其他模组请求互斥
+  modemPortBusy = true;
+  bool ok = modemInitInner();
+  modemPortBusy = false;
+  return ok;
+}
+
+static bool modemInitInner() {
   // 清掉上电噪声/残留
   while (Serial1.available()) Serial1.read();
 
+  modemReady = false;
+  int atRetry = 0;
   while (!sendATandWaitOK("AT", 1000)) {
+    if (++atRetry >= 20) {
+      logCaptureLn(String("⚠️ 模组无响应（已尝试20次），放弃初始化，稍后自动重试"));
+      return false;
+    }
     logCaptureLn(String("AT未响应，重试..."));
     blink_short();
   }
@@ -67,7 +89,7 @@ void modemInit() {
     String manufacturer = "未知";
     String model = "未知";
     String version = "未知";
-    
+
     // 按行解析
     int lineStart = 0;
     int lineNum = 0;
@@ -89,24 +111,35 @@ void modemInit() {
   }
 
   if(need_set_CGACT) {
+    int cgactRetry = 0;
     while (!sendATandWaitOK("AT+CGACT=0,1", 5000)) {
+      if (++cgactRetry >= 3) {
+        logCaptureLn(String("⚠️ 设置CGACT失败3次，跳过（不影响收短信）"));
+        break;
+      }
       logCaptureLn(String("设置CGACT失败，重试..."));
       blink_short();
     }
-    logCaptureLn(String("已禁用数据连接(AT+CGACT=0,1)，防止流量消耗"));
+    if (cgactRetry < 3) logCaptureLn(String("已禁用数据连接(AT+CGACT=0,1)，防止流量消耗"));
   } else {
     logCaptureLn(String("该型号无法配置(AT+CGACT=0,1)，跳过该命令，会不会消耗流量？自求多福"));
   }
+  int cnmiRetry = 0;
   while (!sendATandWaitOK("AT+CNMI=2,2,0,0,0", 1000)) {
+    if (++cnmiRetry >= 3) break;
     logCaptureLn(String("设置CNMI失败，重试..."));
     blink_short();
   }
-  logCaptureLn(String("CNMI参数设置完成"));
+  if (cnmiRetry < 3) logCaptureLn(String("CNMI参数设置完成"));
+  else logCaptureLn(String("⚠️ CNMI设置失败，短信可能无法上报"));
+  int cmgfRetry = 0;
   while (!sendATandWaitOK("AT+CMGF=0", 1000)) {
+    if (++cmgfRetry >= 3) break;
     logCaptureLn(String("设置PDU模式失败，重试..."));
     blink_short();
   }
-  logCaptureLn(String("PDU模式设置完成"));
+  if (cmgfRetry < 3) logCaptureLn(String("PDU模式设置完成"));
+  else logCaptureLn(String("⚠️ PDU模式设置失败，短信解析可能异常"));
   int ceregRetry = 0;
   while (!waitCEREG() && ceregRetry < 30) {
     logCaptureLn(String("等待网络注册..."));
@@ -128,9 +161,10 @@ void modemInit() {
       }
     }
   } else {
-    logCaptureLn(String("⚠️ 网络注册超时（无SIM卡或信号差），模组功能不可用"));
+    logCaptureLn(String("⚠️ 网络注册超时（无SIM卡或信号差），模组功能不可用，稍后自动重试"));
     modemReady = false;
   }
+  return modemReady;
 }
 
 void blink_short(unsigned long gap_time) {
