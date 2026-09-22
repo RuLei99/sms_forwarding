@@ -143,6 +143,25 @@
 
 **返回**: true=成功, false=PDU编码失败/无提示符/ERROR/超时
 
+### 模组信息缓存（全局变量）
+
+| 变量 | 来源 | 更新时机 |
+|---|---|---|
+| `modemImeiCache` | `AT+GSN` | 模组初始化注册成功后查一次 |
+| `modemIccidCache` | `AT+ICCID` | 模组初始化注册成功后查一次 |
+| `modemOperatorCache` | `AT+COPS?` | 初始化后 + 健康巡检每 5 分钟刷新 |
+| `modemModelCache` / `modemFwCache` | `ATI` 第 2/3 行 | 模组初始化时 |
+
+供 `/status` 返回，Web「系统概览 → 模组信息」卡片展示；原始查询可走「AT 终端」。
+
+### 共享 AT 响应解析（modem.cpp 导出，多处复用）
+
+| 函数 | 作用 | 使用方 |
+|---|---|---|
+| `String modemParseCops(const String& resp)` | `AT+COPS?` 响应 → 运营商名（失败空串） | 初始化 / 健康巡检 / `/modem?operator` |
+| `bool modemParseCsq(const String& resp, int& dbm)` | `AT+CSQ` 响应 → dBm（rssi=99 返回 false） | 健康巡检 / `/modem?signal` |
+| `String modemQueryImei()` | 发送并解析 `AT+GSN`（须持串口占用权） | 初始化 / `/modem?imei` |
+
 ---
 
 ## 模块: push.cpp — 推送与邮件
@@ -259,7 +278,8 @@ HMAC-SHA256(timestamp + "\n" + secret, secret) → Base64 → URLEncode
 
 ---
 
-### `String readSerialLine(HardwareSerial& port)`
+### `String readSerialLine(HardwareSerial& port)`（已改为 sms_process.cpp 文件内静态函数）
+不再对外导出：内部使用跨调用静态缓冲（非重入），外部误用会破坏 URC 解析状态。
 逐字节读取串口，遇 `\n` 返回行，`\r` 跳过，超长行保护（超过 SERIAL_BUFFER_SIZE 归零），无完整行返回空串。
 
 **注意**: 使用 `static` 缓冲区，仅适合单线程调用。
@@ -379,20 +399,8 @@ HTTP Basic Authentication，账号密码来自 `config.webUser` / `config.webPas
 ---
 
 ### `void handleSave()`
-解析 POST 表单 → 写入 `config` → `saveConfig()` → 重新校验 → 发送通知邮件 → 返回成功页面（3 秒跳转）。
-
----
-
-### `void handleQuery()`
-根据 `?type=` 参数执行不同查询：
-
-| type | AT 指令 | 返回内容 |
-|---|---|---|
-| `ati` | `ATI` | 制造商/型号/固件版本 |
-| `signal` | `AT+CESQ` | RSRP/RSRQ 信号强度 |
-| `siminfo` | `AT+CIMI` `AT+ICCID` `AT+CNUM` | IMSI/ICCID/本机号码 |
-| `network` | `AT+CEREG?` `AT+COPS?` `AT+CGACT?` `AT+CGDCONT?` | 注册/运营商/数据/APN |
-| `wifi` | (WiFi 对象) | SSID/RSSI/IP/网关/DNS/MAC/BSSID/信道 |
+解析 POST 表单 → 写入 `config` → `saveConfig()` → 重新校验 → 返回 JSON。
+注意：**webUser/webPass 留空时保留旧值**（不再回退默认密码）；推送类型/SMTP 端口做范围校验，非法值回退默认。
 
 ---
 
@@ -439,3 +447,44 @@ HTTP Basic Authentication，账号密码来自 `config.webUser` / `config.webPas
 | 其他 | 返回 `{"success":false,"message":"未知操作"}` |
 
 **注意**: 重启后设备需重新走完整启动流程（WiFi + 模组初始化），约 1 分钟恢复。
+
+---
+
+### `void handleStatus()`
+路由 `GET /status`，概览页 5 秒轮询的轻量状态 JSON：
+
+```json
+{
+  "ip": "192.168.1.x", "ssid": "...", "heap": 187, "uptime": "3:42:17",
+  "modem": true, "signal": "-71 dBm",
+  "operator": "中国移动", "imei": "86...", "iccid": "8986...",
+  "model": "ML307R", "fw": "ML307RAR01A07",
+  "smsOnly": true, "email": true, "push": 2
+}
+```
+
+`signal` 来自 `health.cpp` 巡检缓存，`operator/imei/iccid/model/fw` 来自 `modem.cpp` 信息缓存。
+
+### `void handleJobStatus()`
+路由 `GET /job?id=N`，任务队列状态轮询：`{"state":"queued|running|done|unknown","success":bool,"message":"..."}`。
+Ping/发短信/AT/模组重启均入队执行（jobs.cpp），浏览器不挂连接。
+
+### `void handleRecordsExport()`
+路由 `GET /recordsexport`，流式导出短信记录 CSV（全量历史，UTF-8 BOM）。
+
+### `void handleConfigExport()` / `void handleConfigImport()`
+`GET /config/export[?plain=1]` 导出配置 JSON（默认密钥打码 `******`，plain=1 含明文）；
+`POST /config/import`（body 为 JSON）校验后整体应用并保存，打码字段跳过，非法值整体拒绝。
+
+### jobs 模块（jobs.h/.cpp）
+`jobsSubmit(type, arg1, arg2)` 入队（忙返回 0）；`jobsQuery(id, out)` 查询；`jobsRun()` 在 loop 中执行；
+`jobsIdle()` 供健康巡检避让。任务类型见 task_types.h 的 ModemJobType。
+
+### push 模块新增
+`pushTypeCount()/pushTypeName()` — 描述符表访问；`pushChannelFieldsValid()` — 表驱动字段校验；
+`pushChannelCooling(i)/pushChannelStatsJson()/pushStatsNoteBlocked(i)` — 通道健康熔断；
+`pushBroadcastText(title, text)` — 文本广播到全通道+邮件（每日报告用）。
+
+### health 模块新增
+`HealthDayStats dayStats` — 每日统计（收信/转发/拦截/信号范围/堆最低）；
+`healthSendReport()` — 立即发送每日报告并清零统计（每天 8 点自动触发，或 REPORT 命令）。

@@ -135,6 +135,7 @@ const char* htmlPage = R"rawliteral(
     .at-bar{display:flex;gap:8px}
     .at-bar input{flex:1;font-family:var(--mono)}
     .at-bar .btn{min-width:64px}
+    .nav-sheet{display:none}
     @media (max-width:740px){
       .sidebar{top:auto;right:0;bottom:0;width:100%;height:auto;flex-direction:row;align-items:stretch;background:rgba(255,255,255,.78);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border-right:none;border-top:1px solid rgba(0,0,0,.06);padding-bottom:env(safe-area-inset-bottom)}
       .sidebar-brand,.sidebar-divider,.sidebar-footer{display:none}
@@ -142,8 +143,21 @@ const char* htmlPage = R"rawliteral(
       .sidebar-nav::-webkit-scrollbar{display:none}
       .sidebar-section-label{display:none}
       .sidebar-nav a{flex-direction:column;gap:3px;padding:6px 10px;min-width:56px;font-size:10px;text-align:center}
+      /* 底部栏只保留 3 个高频入口 + 更多，其余收进弹出面板（11 项平铺手机上太长） */
+      .sidebar-nav a:not(.nav-primary):not(.nav-more){display:none}
       .sidebar-nav a .ico{width:20px;height:20px}
       .sidebar-nav a.active{background:var(--accent-soft);color:var(--accent)}
+      .nav-sheet{display:block;position:fixed;inset:0;z-index:200;visibility:hidden;pointer-events:none}
+      .nav-sheet.open{visibility:visible;pointer-events:auto}
+      .nav-sheet-mask{position:absolute;inset:0;background:rgba(0,0,0,.35);opacity:0;transition:opacity .2s var(--ease)}
+      .nav-sheet.open .nav-sheet-mask{opacity:1}
+      .nav-sheet-panel{position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:18px 18px 0 0;padding:18px 16px calc(20px + env(safe-area-inset-bottom));transform:translateY(102%);transition:transform .25s var(--ease);max-height:70vh;overflow-y:auto;box-shadow:0 -8px 40px rgba(0,0,0,.15)}
+      .nav-sheet.open .nav-sheet-panel{transform:translateY(0)}
+      .nav-sheet-title{font-size:15px;font-weight:600;margin-bottom:14px;text-align:center;color:var(--ink)}
+      .nav-sheet-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+      .nav-sheet-grid a{display:flex;flex-direction:column;align-items:center;gap:7px;padding:12px 4px;border-radius:var(--radius-md);font-size:12px;font-weight:500;color:var(--ink);text-decoration:none;cursor:pointer}
+      .nav-sheet-grid a:active{background:rgba(0,0,0,.05)}
+      .nav-sheet-grid a .ico{width:22px;height:22px;color:var(--accent)}
       .main{margin-left:0}
       .content{padding:24px 18px calc(92px + env(safe-area-inset-bottom))}
       .page-title{font-size:24px}
@@ -175,25 +189,34 @@ const char* htmlPage = R"rawliteral(
     </div>
     <nav class="sidebar-nav">
       <div class="sidebar-section-label">配置</div>
-      <a data-panel="overview" class="active"><svg class="ico"><use href="#ig"/></svg><span class="txt">系统概览</span></a>
-      <a data-panel="inbox"><svg class="ico"><use href="#ii"/></svg><span class="txt">短信记录</span></a>
+      <a data-panel="overview" class="active nav-primary"><svg class="ico"><use href="#ig"/></svg><span class="txt">系统概览</span></a>
+      <a data-panel="inbox" class="nav-primary"><svg class="ico"><use href="#ii"/></svg><span class="txt">短信记录</span></a>
       <a data-panel="account"><svg class="ico"><use href="#iu"/></svg><span class="txt">账号管理</span></a>
       <a data-panel="email"><svg class="ico"><use href="#im"/></svg><span class="txt">邮件通知</span></a>
-      <a data-panel="push"><svg class="ico"><use href="#ip"/></svg><span class="txt">推送通道</span></a>
+      <a data-panel="push" class="nav-primary"><svg class="ico"><use href="#ip"/></svg><span class="txt">推送通道</span></a>
       <a data-panel="admin"><svg class="ico"><use href="#is"/></svg><span class="txt">管理员 &amp; 黑名单</span></a>
       <div class="sidebar-divider"></div>
       <div class="sidebar-section-label">工具</div>
       <a data-panel="sendsms"><svg class="ico"><use href="#ie"/></svg><span class="txt">发送短信</span></a>
-      <a data-panel="diagnose"><svg class="ico"><use href="#ic"/></svg><span class="txt">模组诊断</span></a>
       <a data-panel="network"><svg class="ico"><use href="#io"/></svg><span class="txt">网络测试</span></a>
       <a data-panel="modem"><svg class="ico"><use href="#ir"/></svg><span class="txt">模组控制</span></a>
       <a data-panel="atterm"><svg class="ico"><use href="#it"/></svg><span class="txt">AT 终端</span></a>
       <a data-panel="log"><svg class="ico"><use href="#il"/></svg><span class="txt">系统日志</span></a>
+      <a class="nav-more" onclick="openNavSheet()"><svg class="ico"><use href="#ic"/></svg><span class="txt">更多</span></a>
     </nav>
     <div class="sidebar-footer">
       <button class="btn btn-white btn-sm btn-block" onclick="switchPanel('account')"><span>修改密码</span></button>
     </div>
   </aside>
+
+  <!-- 手机端「更多」面板：全部功能入口（桌面端隐藏） -->
+  <div class="nav-sheet" id="navSheet">
+    <div class="nav-sheet-mask" onclick="closeNavSheet()"></div>
+    <div class="nav-sheet-panel">
+      <div class="nav-sheet-title">全部功能</div>
+      <div class="nav-sheet-grid" id="navSheetGrid"></div>
+    </div>
+  </div>
 
   <main class="main">
     <div class="content">
@@ -210,8 +233,30 @@ const char* htmlPage = R"rawliteral(
             <div class="overview-item"><div class="label">WiFi SSID</div><div class="value" id="ovSsid">%WIFI_SSID%</div></div>
             <div class="overview-item"><div class="label">Free Heap</div><div class="value" id="ovHeap">%FREE_HEAP%</div></div>
             <div class="overview-item"><div class="label">Uptime</div><div class="value" id="ovUptime">%UPTIME%</div></div>
-            <div class="overview-item"><div class="label">Signal</div><div class="value" id="ovSignal">—</div></div>
           </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">模组信息</div>
+        <div class="card-body">
+          <div class="overview-grid">
+            <div class="overview-item"><div class="label">信号强度</div><div class="value" id="ovSignal">—</div></div>
+            <div class="overview-item"><div class="label">运营商</div><div class="value" id="ovOperator">—</div></div>
+            <div class="overview-item"><div class="label">IMEI</div><div class="value" id="ovImei">—</div></div>
+            <div class="overview-item"><div class="label">SIM 卡 (ICCID)</div><div class="value" id="ovIccid">—</div></div>
+            <div class="overview-item"><div class="label">模组型号</div><div class="value" id="ovModel">—</div></div>
+            <div class="overview-item"><div class="label">固件版本</div><div class="value" id="ovFw">—</div></div>
+          </div>
+          <p class="form-hint">模组初始化成功后自动读取；信号/运营商随健康巡检每 5 分钟自动更新。更多原始信息可在「AT 终端」查询。</p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">通道健康 <span id="chHealthBadge" class="status-live">● 自动刷新中</span></div>
+        <div class="card-body">
+          <table class="info-table" id="chHealthTable">
+            <tr><td colspan="3">加载中...</td></tr>
+          </table>
+          <p class="form-hint">连续失败 5 次的通道自动熔断（30 分钟起步指数退避，成功即恢复），避免每条短信都陪着重试</p>
         </div>
       </div>
       <div class="card">
@@ -252,6 +297,21 @@ const char* htmlPage = R"rawliteral(
       </div>
       <button type="submit" class="btn btn-primary btn-block btn-save">保存配置</button>
       </form>
+      <div class="card" style="margin-top:14px;">
+        <div class="card-header">配置备份 / 恢复</div>
+        <div class="card-body">
+          <div class="btn-row">
+            <button class="btn btn-secondary btn-sm" onclick="window.open('/config/export?plain=1')">导出配置（含密钥）</button>
+            <button class="btn btn-secondary btn-sm" onclick="window.open('/config/export')">导出配置（密钥打码）</button>
+          </div>
+          <div class="btn-row" style="margin-top:9px;">
+            <input type="file" id="cfgImportFile" accept=".json" style="display:none" onchange="importConfigFile(this)">
+            <button class="btn btn-secondary btn-sm" onclick="document.getElementById('cfgImportFile').click()">导入配置（JSON）</button>
+          </div>
+          <div class="result-box" id="cfgBackupResult" style="margin-top:9px;"></div>
+          <p class="form-hint">换设备或重刷固件后可用导出的 JSON 一键恢复全部配置（含推送通道密钥，妥善保管）</p>
+        </div>
+      </div>
     </div>
 
     <div class="panel" id="panel-inbox">
@@ -263,8 +323,9 @@ const char* htmlPage = R"rawliteral(
           <div class="btn-row" style="margin-top:12px;">
             <button class="btn btn-secondary btn-sm" onclick="refreshInbox()">手动刷新</button>
             <button class="btn btn-secondary btn-sm" onclick="clearInbox()">清空记录</button>
+            <button class="btn btn-secondary btn-sm" onclick="window.open('/recordsexport')">导出 CSV</button>
           </div>
-          <p class="form-hint">记录保存在内存中，设备重启后清空，不占用闪存寿命</p>
+          <p class="form-hint">记录持久化保存（重启不丢），页面显示最近 50 条，导出包含全部历史</p>
         </div>
       </div>
     </div>
@@ -293,7 +354,7 @@ const char* htmlPage = R"rawliteral(
 
     <div class="panel" id="panel-push">
       <h1 class="page-title">推送通道</h1>
-      <p class="page-subtitle">最多 5 个独立推送通道，支持 POST JSON、Bark、钉钉、飞书、PushPlus、Server酱、Gotify、Telegram</p>
+      <p class="page-subtitle">最多 5 个独立推送通道，支持 POST JSON、Bark、钉钉、飞书、PushPlus、Server酱、Gotify、Telegram、ntfy、MQTT</p>
       <form action="/save" method="POST" id="mainForm3">
       <div class="card">
         <div class="card-header">通道配置</div>
@@ -314,7 +375,7 @@ const char* htmlPage = R"rawliteral(
         <div class="card-body">
           <div class="form-group">
             <input class="form-input" type="text" name="adminPhone" value="%ADMIN_PHONE%" placeholder="13800138000">
-            <p class="form-hint">此号码可通过短信发送远程指令（SMS:号码:内容 发短信、RESET 重启）</p>
+            <p class="form-hint">此号码可通过短信发送远程指令（SMS:号码:内容 发短信、RESET 重启、REPORT 立即发健康报告）</p>
           </div>
         </div>
       </div>
@@ -344,6 +405,22 @@ const char* htmlPage = R"rawliteral(
           <p class="form-hint">先经过号码黑名单，再经过关键词过滤；管理员命令不受过滤影响</p>
         </div>
       </div>
+      <div class="card">
+        <div class="card-header">时区与每日报告</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="form-group"><label class="form-label">时区（小时，-12 ~ 14）</label>
+              <input class="form-input" type="number" name="tzHours" value="%TZ_HOURS%" min="-12" max="14" placeholder="8">
+            </div>
+            <div class="form-group"><label class="form-label">每日健康报告</label>
+              <label style="display:inline-flex;align-items:center;gap:8px;padding:8px 0;cursor:pointer;">
+                <input type="checkbox" name="reportEnabled"%REPORT_CHECKED%> 每天 8 点发送
+              </label>
+            </div>
+          </div>
+          <p class="form-hint">报告经邮件 + 所有有效推送通道发送，内容为昨日收信/转发统计与设备状态</p>
+        </div>
+      </div>
       <button type="submit" class="btn btn-primary btn-block btn-save">保存配置</button>
       </form>
     </div>
@@ -354,24 +431,12 @@ const char* htmlPage = R"rawliteral(
       <div class="card">
         <div class="card-header">新建短信</div>
         <div class="card-body">
-          <form action="/sendsms" method="POST" target="_self">
-            <div class="form-group"><label class="form-label">目标号码</label><input class="form-input" type="text" name="phone" placeholder="13800138000" required></div>
-            <div class="form-group"><label class="form-label">短信内容</label><textarea class="form-textarea" name="content" placeholder="输入短信内容..." required oninput="updateCount(this)"></textarea><p class="form-hint">已输入 <span id="charCount">0</span> 字符</p></div>
-            <button type="submit" class="btn btn-primary" style="padding:10px 22px;">发送短信</button>
+          <form id="smsForm" onsubmit="return submitSmsForm(event)">
+            <div class="form-group"><label class="form-label">目标号码</label><input class="form-input" type="text" name="phone" id="smsPhone" placeholder="13800138000" required></div>
+            <div class="form-group"><label class="form-label">短信内容</label><textarea class="form-textarea" name="content" id="smsContent" placeholder="输入短信内容..." required oninput="updateCount(this)"></textarea><p class="form-hint">已输入 <span id="charCount">0</span> 字符</p></div>
+            <button type="submit" class="btn btn-primary" id="smsSendBtn" style="padding:10px 22px;">发送短信</button>
           </form>
-        </div>
-      </div>
-    </div>
-
-    <div class="panel" id="panel-diagnose">
-      <h1 class="page-title">模组诊断</h1>
-      <p class="page-subtitle">查询模组状态、SIM 卡与网络信息</p>
-      <div class="card">
-        <div class="card-header">查询</div>
-        <div class="card-body">
-          <div class="btn-row"><button class="btn btn-secondary" onclick="queryInfo('ati')">固件信息</button><button class="btn btn-secondary" onclick="queryInfo('signal')">信号质量</button></div>
-          <div class="btn-row"><button class="btn btn-secondary" onclick="queryInfo('siminfo')">SIM 卡信息</button><button class="btn btn-secondary" onclick="queryInfo('network')">网络状态</button><button class="btn btn-secondary" onclick="queryInfo('wifi')">WiFi 状态</button></div>
-          <div class="result-box" id="queryResult"></div>
+          <div class="result-box" id="smsSendResult" style="margin-top:10px;"></div>
         </div>
       </div>
     </div>
@@ -388,6 +453,23 @@ const char* htmlPage = R"rawliteral(
         </div>
       </div>
       <div class="card">
+        <div class="card-header">WiFi 配置（主 + 备用热备）</div>
+        <div class="card-body">
+          <form action="/save" method="POST">
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">主 WiFi SSID</label><input class="form-input" type="text" name="wifi1Ssid" value="%WIFI1_SSID%" placeholder="留空使用固件内置"></div>
+              <div class="form-group"><label class="form-label">主 WiFi 密码</label><input class="form-input" type="password" name="wifi1Pass" value="%WIFI1_PASS%" placeholder="主 WiFi 密码"></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">备用 SSID（可选）</label><input class="form-input" type="text" name="wifi2Ssid" value="%WIFI2_SSID%" placeholder="留空不启用热备"></div>
+              <div class="form-group"><label class="form-label">备用密码</label><input class="form-input" type="password" name="wifi2Pass" value="%WIFI2_PASS%" placeholder="备用 WiFi 密码"></div>
+            </div>
+            <p class="form-hint">主 WiFi 保存在设备里，留空则使用固件内置（wifi_config.h）；保存后点击下方「重启 WiFi」或重启设备生效。主 WiFi 掉线超 60 秒自动切备用，恢复后不自动切回。</p>
+            <button type="submit" class="btn btn-primary btn-sm">保存 WiFi 配置</button>
+          </form>
+        </div>
+      </div>
+      <div class="card">
         <div class="card-header">WiFi 控制</div>
         <div class="card-body">
           <button class="btn btn-danger" onclick="wifiRestart()">重启 WiFi</button>
@@ -399,7 +481,7 @@ const char* htmlPage = R"rawliteral(
 
     <div class="panel" id="panel-modem">
       <h1 class="page-title">模组控制</h1>
-      <p class="page-subtitle">模组重启、飞行模式、信号查询等操作</p>
+      <p class="page-subtitle">模组重启与飞行模式控制（信号/运营商/IMEI 见「系统概览」）</p>
       <div class="card">
         <div class="card-header">流量安全</div>
         <div class="card-body">
@@ -419,13 +501,6 @@ const char* htmlPage = R"rawliteral(
           <div class="btn-row"><button class="btn btn-danger" onclick="modemAction('restart')">软重启 (AT+CFUN)</button><button class="btn btn-danger" onclick="modemAction('hardreset')">硬重启 (EN引脚)</button></div>
           <p class="form-hint">软重启发送 AT+CFUN=1,1 指令（15s 超时）；硬重启通过 EN 引脚断电后重新上电</p>
           <div class="result-box" id="modemRstResult"></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-header">信号查询</div>
-        <div class="card-body">
-          <div class="btn-row"><button class="btn btn-primary" onclick="modemAction('signal')">查询信号强度</button><button class="btn btn-primary" onclick="modemAction('operator')">查询运营商</button><button class="btn btn-primary" onclick="modemAction('imei')">查询 IMEI</button></div>
-          <div class="result-box" id="modemQueryResult"></div>
         </div>
       </div>
       <div class="card">
@@ -505,8 +580,8 @@ const char* htmlPage = R"rawliteral(
       // 按平台预填官方默认接口地址；字段为空或恰为某平台默认地址时才更新，用户手输的自定义地址不动
       var urlInput = document.getElementById('url' + idx);
       if (urlInput) {
-        var defUrls = {4:'https://oapi.dingtalk.com/robot/send',5:'http://www.pushplus.plus/send',8:'https://open.feishu.cn/open-apis/bot/v2/hook/',10:'https://api.telegram.org'};
-        var urlPhs = {1:'http://your-server.com/api',2:'https://api.day.app/你的Key（或自建服务器地址）',3:'http://your-server.com/api',6:'留空将自动用 SendKey 拼接官方接口',7:'http://your-server.com/api',9:'https://你的Gotify服务器地址'};
+        var defUrls = {4:'https://oapi.dingtalk.com/robot/send',5:'http://www.pushplus.plus/send',8:'https://open.feishu.cn/open-apis/bot/v2/hook/',10:'https://api.telegram.org',11:'https://ntfy.sh'};
+        var urlPhs = {1:'http://your-server.com/api',2:'https://api.day.app/你的Key（或自建服务器地址）',3:'http://your-server.com/api',6:'留空将自动用 SendKey 拼接官方接口',7:'http://your-server.com/api',9:'https://你的Gotify服务器地址',11:'留空使用官方 ntfy.sh，也可填自建服务器',12:'broker 地址 host:port（默认 1883）'};
         var cur = urlInput.value;
         var isDefaultVal = false;
         for (var k in defUrls) { if (defUrls[k] === cur) { isDefaultVal = true; break; } }
@@ -530,6 +605,8 @@ const char* htmlPage = R"rawliteral(
       else if (type == 8) { hint.innerHTML = '飞书机器人<br>已预填官方地址，需在其末尾拼接你的 Hook Token；签名验证另填 Secret'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Secret（签名密钥，可选）'; document.getElementById('key1'+idx).placeholder='飞书签名密钥'; }
       else if (type == 9) { hint.innerHTML = 'Gotify<br>填写服务器地址 + 应用 Token'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Token（应用 Token）'; document.getElementById('key1'+idx).placeholder='A...'; }
       else if (type == 10) { hint.innerHTML = 'Telegram Bot<br>Chat ID（参数1）+ Bot Token（参数2）'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Chat ID'; document.getElementById('key1'+idx).placeholder='123456789'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='Bot Token'; document.getElementById('key2'+idx).placeholder='12345678:ABC...'; }
+      else if (type == 11) { hint.innerHTML = 'ntfy 推送<br>填 Topic（参数1），URL 留空用官方 ntfy.sh，自建服务填根地址'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Topic（订阅主题）'; document.getElementById('key1'+idx).placeholder='my-sms-topic'; }
+      else if (type == 12) { hint.innerHTML = 'MQTT 发布<br>URL 填 broker 地址 host:port（明文 1883）<br>参数1=发布 Topic，参数2 可选 user:pass'; extra.style.display='block'; document.getElementById('key1label'+idx).innerText='Topic（发布主题）'; document.getElementById('key1'+idx).placeholder='home/sms'; if(kg)kg.style.display='block'; document.getElementById('key2label'+idx).innerText='账号密码（可选）'; document.getElementById('key2'+idx).placeholder='user:pass'; }
     }
     document.addEventListener('DOMContentLoaded', function() {
       for (var i = 0; i < 5; i++) { toggleChannel(i); updateTypeHint(i); }
@@ -563,7 +640,21 @@ const char* htmlPage = R"rawliteral(
     function applyStatus(d){
       function set(id,v){var e=document.getElementById(id);if(e)e.textContent=v;}
       set('ovIp',d.ip);set('ovSsid',d.ssid);set('ovHeap',d.heap+' KB');set('ovUptime',d.uptime);
-      set('ovSignal',d.signal||'—');
+      set('ovSignal',d.signal||'—');set('ovOperator',d.operator||'—');set('ovImei',d.imei||'—');
+      set('ovIccid',d.iccid||'—');set('ovModel',d.model||'—');set('ovFw',d.fw||'—');
+      var ht=document.getElementById('chHealthTable');
+      if(ht&&d.channels){
+        var rows='',anyCool=false;
+        for(var ci=0;ci<d.channels.length;ci++){
+          var c=d.channels[ci];
+          if(!c.ok&&!c.fail&&!c.blocked)continue;
+          if(c.cool)anyCool=true;
+          rows+='<tr><td>通道 '+(ci+1)+'</td><td><span class="'+(c.cool?'m-no':'m-ok')+'">'+(c.cool?'已熔断':'正常')+'</span></td><td>成功 '+c.ok+' / 失败 '+c.fail+(c.blocked?(' / 跳过 '+c.blocked):'')+'</td></tr>';
+        }
+        ht.innerHTML=rows||'<tr><td colspan="3">尚无推送记录</td></tr>';
+        var hb=document.getElementById('chHealthBadge');
+        if(hb){hb.className=anyCool?'status-err':'status-live';hb.textContent=anyCool?'● 有通道熔断':'● 正常';}
+      }
       set('cfgModem',d.modem?'已就绪':'未就绪');
       set('cfgEmail',d.email?'已配置':'未配置');
       set('cfgPush',d.push+' 个已启用');
@@ -644,25 +735,96 @@ const char* htmlPage = R"rawliteral(
       });
     });
 
-    function queryInfo(type) {
-      var r = document.getElementById('queryResult');
-      r.className = 'result-box result-loading'; r.textContent = '查询中...';
-      fetch('/query?type=' + type).then(function(rr){return rr.json()}).then(function(d){
-        if(d.success){r.className='result-box result-info';r.innerHTML=d.message;}
-        else{r.className='result-box result-error';r.innerHTML='查询失败: '+d.message;}
-      }).catch(function(e){r.className='result-box result-error';r.textContent='请求失败: '+e;});
+    function importConfigFile(inp){
+      var f=inp.files[0];
+      if(!f)return;
+      var r=document.getElementById('cfgBackupResult');
+      r.className='result-box result-loading';r.textContent='正在导入 '+f.name+' ...';
+      f.text().then(function(txt){
+        return fetch('/config/import',{method:'POST',headers:{'Content-Type':'application/json'},body:txt})
+          .then(function(rr){return rr.json()});
+      }).then(function(d){
+        r.className='result-box '+(d.success?'result-success':'result-error');
+        r.textContent=d.message;
+        if(d.success)setTimeout(function(){location.reload();},2000);
+      }).catch(function(e){
+        r.className='result-box result-error';r.textContent='导入失败: '+e;
+      });
+      inp.value='';
     }
+
+    function openNavSheet(){
+      var g=document.getElementById('navSheetGrid');
+      if(!g.dataset.built){
+        document.querySelectorAll('.sidebar-nav a[data-panel]').forEach(function(a){
+          var b=document.createElement('a');
+          b.innerHTML=a.innerHTML;
+          b.onclick=function(){switchPanel(a.dataset.panel);closeNavSheet();};
+          g.appendChild(b);
+        });
+        g.dataset.built='1';
+      }
+      document.getElementById('navSheet').classList.add('open');
+    }
+    function closeNavSheet(){document.getElementById('navSheet').classList.remove('open');}
 
     function confirmPing(){if(confirm('确定要执行 Ping 吗？将消耗少量流量。'))doPing();}
     function doPing(){
       var b=document.getElementById('pingBtn'),r=document.getElementById('pingResult');
       b.disabled=true;b.textContent='Pinging...';
-      r.className='result-box result-loading';r.textContent='正在 Ping 8.8.8.8（最长 30 秒）...';
-      fetch('/ping',{method:'POST'}).then(function(rr){return rr.json()}).then(function(d){
+      runJob({url:'/ping',method:'POST'},r,'正在 Ping 8.8.8.8（最长 35 秒）...',90,function(){
         b.disabled=false;b.textContent='Ping 8.8.8.8';
-        if(d.success){r.className='result-box result-success';r.innerHTML='Ping 成功 — '+d.message;}
-        else{r.className='result-box result-error';r.innerHTML='Ping 失败 — '+d.message;}
-      }).catch(function(e){b.disabled=false;b.textContent='Ping 8.8.8.8';r.className='result-box result-error';r.textContent='请求失败: '+e;});
+      });
+    }
+
+    // ---- 模组任务队列：提交 → 轮询 /job?id= 直到完成 ----
+    function runJob(req, box, busyText, timeoutSec, onDone){
+      timeoutSec=timeoutSec||90;
+      box.className='result-box result-loading';box.textContent=busyText;
+      fetch(req.url,{method:req.method||'GET'}).then(function(rr){return rr.json()}).then(function(d){
+        if(!d.queued||!d.id){
+          box.className='result-box result-error';box.textContent=d.message||'提交失败';
+          if(onDone)onDone();return;
+        }
+        var left=timeoutSec;
+        var timer=setInterval(function(){
+          left--;
+          if(left<=0){clearInterval(timer);box.className='result-box result-error';box.textContent='等待超时，请到系统日志查看结果';if(onDone)onDone();return;}
+          fetch('/job?id='+d.id).then(function(rr){return rr.json()}).then(function(j){
+            if(j.state==='queued'||j.state==='running'){box.textContent=busyText+'（'+j.message+'，'+left+'s）';return;}
+            clearInterval(timer);
+            box.className='result-box '+(j.success?'result-success':'result-error');
+            box.textContent=j.message;
+            if(onDone)onDone();
+          }).catch(function(){});
+        },1000);
+      }).catch(function(e){box.className='result-box result-error';box.textContent='请求失败: '+e;if(onDone)onDone();});
+    }
+
+    function submitSmsForm(ev){
+      ev.preventDefault();
+      var phone=document.getElementById('smsPhone').value.trim();
+      var content=document.getElementById('smsContent').value.trim();
+      var b=document.getElementById('smsSendBtn'),r=document.getElementById('smsSendResult');
+      if(!phone||!content){r.className='result-box result-error';r.textContent='请填写目标号码和短信内容';return false;}
+      b.disabled=true;b.textContent='发送中...';
+      var body='phone='+encodeURIComponent(phone)+'&content='+encodeURIComponent(content);
+      r.className='result-box result-loading';r.textContent='已提交，正在通过模组发送...';
+      fetch('/sendsms',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})
+        .then(function(rr){return rr.json()}).then(function(d){
+          if(!d.queued){b.disabled=false;b.textContent='发送短信';r.className='result-box result-error';r.textContent=d.message||'提交失败';return;}
+          var left=90;
+          var timer=setInterval(function(){
+            left--;
+            if(left<=0){clearInterval(timer);b.disabled=false;b.textContent='发送短信';r.className='result-box result-error';r.textContent='等待超时，请到系统日志查看结果';return;}
+            fetch('/job?id='+d.id).then(function(rr){return rr.json()}).then(function(j){
+              if(j.state==='queued'||j.state==='running')return;
+              clearInterval(timer);b.disabled=false;b.textContent='发送短信';
+              r.className='result-box '+(j.success?'result-success':'result-error');r.textContent=j.message;
+            }).catch(function(){});
+          },1000);
+        }).catch(function(e){b.disabled=false;b.textContent='发送短信';r.className='result-box result-error';r.textContent='请求失败: '+e;});
+      return false;
     }
 
     var sysReloadTimer = null;
@@ -741,11 +903,9 @@ const char* htmlPage = R"rawliteral(
     }
 
     function modemAction(action){
-      var names={'restart':'软重启','hardreset':'硬重启','signal':'信号查询','operator':'运营商查询','imei':'IMEI查询'};
+      var names={'restart':'软重启','hardreset':'硬重启'};
       var name=names[action]||action;
-      var resultEl=null;
-      if(action==='restart'||action==='hardreset') resultEl=document.getElementById('modemRstResult');
-      else resultEl=document.getElementById('modemQueryResult');
+      var resultEl=document.getElementById('modemRstResult');
       if(action==='hardreset'){
         if(!confirm('硬重启将断电重启模组，确定继续？'))return;
         resultEl.className='result-box result-loading';resultEl.textContent='硬重启中（约10秒）...';
@@ -780,12 +940,25 @@ const char* htmlPage = R"rawliteral(
       try{localStorage.setItem('atHist',JSON.stringify(atHist));}catch(e){}
     }
     function sendAT(){
-      var inp=document.getElementById('atCmd'),cmd=inp.value.trim();if(!cmd)return;
-      var btn=document.getElementById('atBtn');btn.disabled=true;btn.textContent='...';
-      addLog(cmd,'user');inp.value='';pushATHist(cmd);
+      var i=document.getElementById('atCmd'),b=document.getElementById('atBtn');
+      var cmd=i.value.trim();
+      if(!cmd){return;}
+      b.disabled=true;b.textContent='执行中';
+      addLog(cmd,'user');
       fetch('/at?cmd='+encodeURIComponent(cmd)).then(function(rr){return rr.json()}).then(function(d){
-        addLog(d.message,d.success?'resp':'error');
-      }).catch(function(e){addLog('网络错误: '+e,'error')}).finally(function(){btn.disabled=false;btn.textContent='发送';});
+        if(!d.queued){addLog(d.message||'提交失败','error');b.disabled=false;b.textContent='发送';return;}
+        var left=30;
+        var timer=setInterval(function(){
+          left--;
+          if(left<=0){clearInterval(timer);addLog('等待超时（可在系统日志查看结果）','error');b.disabled=false;b.textContent='发送';return;}
+          fetch('/job?id='+d.id).then(function(rr){return rr.json()}).then(function(j){
+            if(j.state==='queued'||j.state==='running')return;
+            clearInterval(timer);b.disabled=false;b.textContent='发送';
+            addLog(j.message||'(空响应)', j.success?'resp':'error');
+            pushATHist(cmd);atIdx=atHist.length;i.value='';
+          }).catch(function(){});
+        },1000);
+      }).catch(function(e){addLog('请求失败: '+e,'error');b.disabled=false;b.textContent='发送';});
     }
     function clearATLog(){var l=document.getElementById('atLog');l.innerHTML='';addLog('日志已清空','resp');}
     document.getElementById('atCmd').addEventListener('keydown',function(e){

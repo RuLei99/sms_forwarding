@@ -50,7 +50,6 @@
    ├── server.on("/sms", handleRoot)                         # 兼容旧链接
    ├── server.on("/sendsms", HTTP_POST, handleSendSms)
    ├── server.on("/ping", HTTP_POST, handlePing)
-   ├── server.on("/query", handleQuery)
    ├── server.on("/flight", handleFlightMode)
    ├── server.on("/at", handleATCommand)
    ├── server.on("/log", handleLog)                          # 系统日志 JSON
@@ -164,6 +163,10 @@ Namespace: "sms_config"
 ├── adminPhone  (String)
 ├── webUser     (String, 默认 "admin")
 ├── webPass     (String, 默认 "admin123")
+├── wifi1Ssid/wifi1Pass (主 WiFi，空=用 wifi_config.h 宏)
+├── wifi2Ssid/wifi2Pass (备用 WiFi 热备)
+├── tzHours     (int, 默认 8)
+├── reportEnabled (bool, 默认 true)
 ├── numBlkList  (String, 换行分隔)
 ├── push0en     (Bool)
 ├── push0type   (UChar)
@@ -182,7 +185,8 @@ Namespace: "sms_config"
 
 ### 修改指南
 
-- **添加新配置项**: 在 `Config` 结构体加字段 → `loadConfig()` 加读取（设默认值） → `saveConfig()` 加写入 → `handleSave()` 加表单解析
+- **添加新配置项**: 在 `Config` 结构体加字段 → `loadConfig()` 加读取（设默认值+范围校验） → `saveConfig()` 加写入（检查 NVS 写结果） → `handleSave()` 加表单解析（非法值回退）
+- **日志环形缓冲**: 单行超过 200 字符自动截断（防 PDU 调试行撑爆 /log 序列化内存）
 - **修改校验逻辑**: 编辑 `isPushChannelValid()` 和 `isConfigValid()`
 
 ---
@@ -396,13 +400,12 @@ checkSerial1URC() 循环:
 
 | 方法 | 路径 | 处理函数 | Auth | 说明 |
 |---|---|---|---|---|
-| GET | `/` | `handleRoot()` | ✓ | SPA 主页（含 10 个面板） |
+| GET | `/` | `handleRoot()` | ✓ | SPA 主页（含 11 个面板） |
 | GET | `/tools` | `handleRoot()` | ✓ | 旧链接兼容，返回同一 SPA 页面 |
 | GET | `/sms` | `handleRoot()` | ✓ | 旧链接兼容，返回同一 SPA 页面 |
 | POST | `/save` | `handleSave()` | ✓ | 保存配置 |
 | POST | `/sendsms` | `handleSendSms()` | ✓ | 网页发送短信 |
 | POST | `/ping` | `handlePing()` | ✓ | Ping 测试 |
-| GET | `/query` | `handleQuery()` | ✓ | 模组/WiFi 信息查询 |
 | GET | `/flight` | `handleFlightMode()` | ✓ | 飞行模式控制 |
 | GET | `/at` | `handleATCommand()` | ✓ | AT 指令调试 |
 | GET | `/log` | `handleLog()` | ✓ | 系统日志（JSON 数组） |
@@ -440,14 +443,13 @@ SPA 页面中的 `%PLACEHOLDER%` 在 `handleRoot()` 中通过 `html.replace()` �
 | 端点 | Content-Type | 返回格式 |
 |---|---|---|
 | `/` `/tools` `/sms` `/save` | `text/html` | HTML 页面 |
-| `/query` `/flight` `/at` `/ping` | `application/json` | `{"success":bool, "message":"..."}` |
+| `/flight` `/at` `/ping` `/modem` | `application/json` | `{"success":bool, "message":"..."}` |
 | `/log` | `application/json` | `["行1", "行2", ...]` |
 
 ### 修改指南
 
 - **添加新页面**: 在 `web_handlers.cpp` 添加处理函数 → `setup()` 注册路由
 - **修改页面样式**: 编辑 `web_html.cpp` 中的 HTML 模板
-- **添加查询类型**: 在 `handleQuery()` 的 if-else 链中添加新 type
 
 ---
 
@@ -455,17 +457,16 @@ SPA 页面中的 `%PLACEHOLDER%` 在 `handleRoot()` 中通过 `html.replace()` �
 
 ### 内容说明
 
-**单页应用 (SPA)**：整个项目仅一个 HTML 常量 `htmlPage`（约 500 行），包含 10 个面板：
+**单页应用 (SPA)**：整个项目仅一个 HTML 常量 `htmlPage`（约 500 行），包含 11 个面板：
 
 | 面板 ID | 名称 | 功能 |
 |---|---|---|
-| `panel-overview` | 系统概览 | 显示 IP/信号/配置状态 |
+| `panel-overview` | 系统概览 | 设备信息 + 模组信息（信号/运营商/IMEI/ICCID/型号，来自 /status）+ 配置状态 |
 | `panel-account` | 账号管理 | 修改 Web 登录密码 |
 | `panel-email` | 邮件通知 | SMTP 邮件配置 |
 | `panel-push` | 推送通道 | 5 个推送通道配置 |
 | `panel-admin` | 管理员 & 黑名单 | 管理员号码 + 号码黑名单 |
 | `panel-sendsms` | 发送短信 | Web 端发送短信 |
-| `panel-diagnose` | 模组诊断 | ATI/信号/SIM/网络查询 |
 | `panel-network` | 网络测试 | Ping 测试 |
 | `panel-modem` | 模组控制 | 飞行模式开关/模组重启 |
 | `panel-atterm` | AT 终端 | AT 指令交互调试 |

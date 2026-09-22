@@ -19,7 +19,6 @@ bool checkAuth();
 void handleRoot();
 void handleToolsPage();
 void handleSave();
-void handleQuery();
 void handleFlightMode();
 void handleATCommand();
 void handleSendSms();
@@ -29,8 +28,12 @@ void handleModem();
 void handleWifi();
 void handleSystem();
 void handleDataLock();
+void handleJobStatus();   // 任务队列状态轮询（/job?id=）
 void handleStatus();     // 概览页轻量状态 JSON（自动刷新用）
 void handleSmsLog();     // 短信记录查询/清空
 void handleTestPush();   // 推送通道测试
+void handleRecordsExport();  // 短信记录导出 CSV
+void handleConfigExport();   // 配置导出 JSON
+void handleConfigImport();   // 配置导入 JSON
 
 #endif

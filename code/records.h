@@ -4,6 +4,9 @@
 #include "globals.h"
 
 #define SMS_RECORD_MAX 50   // 内存中最多保留的短信条数（环形覆盖）
+// LittleFS 持久化文件（records.cpp 读写，web_handlers 导出共用）
+#define RECORDS_FILE "/records.log"
+#define RECORDS_OLD "/records.1.log"
 
 // 单条短信记录（纯内存，重启清空；flash 不做持久化，避免写磨损）
 struct SmsRecord {
@@ -23,7 +26,9 @@ void recordsAdd(const char* sender, const char* text, const char* timestamp,
 String recordsJson();
 // 当前条数
 int recordsCount();
-// 清空
+// 清空（内存 + 持久化文件）
 void recordsClear();
+// 启动时从 LittleFS 加载历史到内存环形缓冲
+void recordsLoad();
 
 #endif

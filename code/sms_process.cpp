@@ -3,6 +3,8 @@
 #include "modem.h"
 #include "push.h"
 #include "records.h"
+#include "config.h"
+#include "health.h"  // dayStats 统计
 
 // 关键词过滤：返回 true 表示该短信应被拦截
 static bool blockedByKeywordFilter(const char* text) {
@@ -143,7 +145,8 @@ void checkConcatTimeout() {
 }
 
 // 读取串口一行（含回车换行），返回行字符串，无新行时返回空
-String readSerialLine(HardwareSerial& port) {
+// 内部使用跨调用静态缓冲，非重入 —— 仅供本文件 checkSerial1URC 使用
+static String readSerialLine(HardwareSerial& port) {
   static char lineBuf[SERIAL_BUFFER_SIZE];
   static int linePos = 0;
   static bool overflow = false;
@@ -236,9 +239,25 @@ bool isAdmin(const char* sender) {
 void processAdminCommand(const char* sender, const char* text) {
   String cmd = String(text);
   cmd.trim();
-  
+
   logCaptureLn(String("处理管理员命令: " + cmd));
-  
+
+  // 立即发送每日健康报告（不占用模组串口，随时可执行）
+  if (cmd.equals("REPORT")) {
+    logCaptureLn(String("执行REPORT命令：立即发送健康报告"));
+    healthSendReport();
+    return;
+  }
+
+  // 管理员命令经 SMS 通道直接操作模组串口；Web 端长 AT 操作（Ping/重启等）进行中时
+  // 直接执行会与嵌套 handleClient 抢串口导致指令交错，忙时拒绝并邮件告知
+  if (modemPortBusy) {
+    logCaptureLn(String("⚠️ 模组串口忙，管理员命令暂缓"));
+    String body = "模组正忙（Web 端操作进行中），请稍后重发命令: " + cmd;
+    sendEmailNotification("命令执行失败", body.c_str());
+    return;
+  }
+
   // 处理 SMS:号码:内容 命令
   if (cmd.startsWith("SMS:")) {
     int firstColon = cmd.indexOf(':');
@@ -298,8 +317,11 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
   logCaptureLn(String("内容: " + String(text)));
   logCaptureLn(String("===================="));
 
+  dayStats.smsIn++;
+
   // 检查是否在号码黑名单中
   if (isInNumberBlackList(sender)) {
+    dayStats.blocked++;
     logCaptureLn(String("发送者在号码黑名单中，忽略该短信"));
     return;
   }
@@ -311,7 +333,7 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
     smsText.trim();
 
     // 检查是否为命令格式
-    if (smsText.startsWith("SMS:") || smsText.equals("RESET")) {
+    if (smsText.startsWith("SMS:") || smsText.equals("RESET") || smsText.equals("REPORT")) {
       processAdminCommand(sender, text);
       // 命令已处理，不再发送普通通知邮件
       return;
@@ -320,6 +342,7 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
 
   // 关键词过滤（白名单/黑名单模式）
   if (blockedByKeywordFilter(text)) {
+    dayStats.blocked++;
     logCaptureLn(String(config.filterWhitelist
       ? "短信未命中白名单关键词，不转发"
       : "短信命中黑名单关键词，不转发"));
@@ -336,6 +359,9 @@ void processSmsContent(const char* sender, const char* text, const char* timesta
   String subject = ""; subject+="短信";subject+=sender;subject+=",";subject+=text;
   String body = ""; body+="来自：";body+=sender;body+="，时间：";body+=timestamp;body+="，内容：";body+=text;
   bool emailOk = sendEmailNotification(subject.c_str(), body.c_str());
+
+  if (emailOk || pushMask != 0) dayStats.fwdOk++;
+  else dayStats.fwdFail++;
 
   // 落一条转发记录（含各通道结果）
   recordsAdd(sender, text, timestamp, emailOk, pushMask, pushEnabled);
@@ -442,8 +468,14 @@ void checkSerial1URC() {
       // 返回IDLE状态
       state = IDLE;
     } 
-    // 如果是其他内容（OK、ERROR等），也返回IDLE
+    // 如果是其他内容（OK、ERROR等），也返回IDLE状态
     else {
+      // 连续到达的两条短信：上一条 +CMT: 后紧跟下一条 +CMT:（PDU 丢失/被跳过），
+      // 直接回 IDLE 会把这条新短信头丢掉导致整条短信丢失 —— 转入等待下一条 PDU
+      if (line.startsWith("+CMT:")) {
+        logCaptureLn(String("⚠️ 上一条短信缺少PDU，检测到新的+CMT，继续等待"));
+        return;  // 保持 WAIT_PDU 状态
+      }
       logCaptureLn(String("收到非PDU数据，返回IDLE状态"));
       state = IDLE;
     }

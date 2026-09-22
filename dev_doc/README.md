@@ -61,7 +61,7 @@ code/
 ├── push.h / .cpp         # 多通道推送、邮件通知、加密工具函数
 ├── sms_process.h / .cpp  # 短信解析、长短信合并、黑名单、管理员命令
 ├── web_handlers.h / .cpp # HTTP 请求处理器 + 日志环形缓冲区
-├── web_html.h / .cpp     # SPA HTML 页面模板（单页 10 个面板）
+├── web_html.h / .cpp     # SPA HTML 页面模板（单页 11 个面板）
 └── wifi_config.h         # WiFi SSID/密码（宏定义）
 ```
 

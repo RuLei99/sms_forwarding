@@ -1,5 +1,48 @@
 #include "modem.h"
 #include "web_handlers.h"
+#include <esp_task_wdt.h>
+
+// 模组信息缓存（Web 概览展示，见 modem.h）
+String modemImeiCache = "";
+String modemOperatorCache = "";
+String modemIccidCache = "";
+String modemModelCache = "";
+String modemFwCache = "";
+
+// ---- 共享 AT 响应解析（初始化 / 健康巡检 / Web 查询共用，避免各处复制粘贴） ----
+
+// 从 AT+COPS? 响应中提取运营商名（带引号的名称段），失败返回空串
+String modemParseCops(const String& resp) {
+  int q1 = resp.indexOf('"');
+  int q2 = resp.indexOf('"', q1 + 1);
+  if (q1 >= 0 && q2 > q1) return resp.substring(q1 + 1, q2);
+  return "";
+}
+
+// 从 AT+CSQ 响应中解析 dBm。成功返回 true 并写 dbm（rssi=99 未知也返回 false）
+bool modemParseCsq(const String& resp, int& dbm) {
+  int csqIdx = resp.indexOf("+CSQ:");
+  if (csqIdx < 0) return false;
+  int commaIdx = resp.indexOf(',', csqIdx);
+  if (commaIdx < 0) return false;
+  int rssi = resp.substring(csqIdx + 5, commaIdx).toInt();
+  if (rssi < 0 || rssi == 99) return false;
+  dbm = -113 + rssi * 2;
+  return true;
+}
+
+// 发送 AT+GSN 并解析 IMEI（调用方必须已持有串口占用权）。失败返回空串
+String modemQueryImei() {
+  String resp = sendATCommand("AT+GSN", 3000);
+  resp.trim();
+  int okIdx = resp.lastIndexOf("OK");
+  if (okIdx > 0) resp = resp.substring(0, okIdx);
+  int echoIdx = resp.indexOf("AT+GSN");
+  if (echoIdx >= 0) resp = resp.substring(echoIdx + 6);
+  resp.trim();
+  if (resp.length() > 0 && resp.indexOf("ERROR") < 0) return resp;
+  return "";
+}
 
 // 发送AT命令并获取响应
 String sendATCommand(const char* cmd, unsigned long timeout) {
@@ -9,6 +52,7 @@ String sendATCommand(const char* cmd, unsigned long timeout) {
   unsigned long start = millis();
   String resp = "";
   while (millis() - start < timeout) {
+    esp_task_wdt_reset();  // 长等待喂狗（sendATCommand 是多数慢操作的底层）
     if (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
@@ -69,6 +113,10 @@ static bool modemInitInner() {
   while (Serial1.available()) Serial1.read();
 
   modemReady = false;
+  // 清空上次会话的模组信息缓存，避免重初始化失败时页面残留旧 IMEI/运营商
+  modemImeiCache = "";
+  modemOperatorCache = "";
+  modemIccidCache = "";
   int atRetry = 0;
   while (!sendATandWaitOK("AT", 1000)) {
     if (++atRetry >= 20) {
@@ -108,6 +156,8 @@ static bool modemInitInner() {
     }
     //这个模组这条命令有bug
     if(model == "ML307Y") need_set_CGACT = false;
+    modemModelCache = model;
+    modemFwCache = version;
   }
 
   if(need_set_CGACT) {
@@ -149,6 +199,25 @@ static bool modemInitInner() {
   if (ceregRetry < 30) {
     logCaptureLn(String("网络已注册"));
     modemReady = true;
+
+    // 注册成功后抓取一次模组静态信息，供 Web 概览展示（单项失败不影响功能）
+    String imei = modemQueryImei();
+    if (imei.length() > 0) modemImeiCache = imei;
+
+    String ccid = sendATCommand("AT+ICCID", 2000);
+    int ci = ccid.indexOf("+ICCID:");
+    if (ci >= 0) {
+      String tmp = ccid.substring(ci + 7);
+      int e = tmp.indexOf('\r');
+      if (e < 0) e = tmp.indexOf('\n');
+      if (e > 0) tmp = tmp.substring(0, e);
+      tmp.trim();
+      if (tmp.length() > 0 && tmp.indexOf("ERROR") < 0) modemIccidCache = tmp;
+    }
+
+    String op = modemParseCops(sendATCommand("AT+COPS?", 2000));
+    if (op.length() > 0) modemOperatorCache = op;
+
     if (config.smsOnly) {
       // LTE附着后网络可能自动重建默认承载，再补一次去激活，确保零流量
       // ML307Y 对 CGACT 命令有兼容问题（见上方 need_set_CGACT 判断），只能跳过
@@ -180,6 +249,7 @@ bool sendATandWaitOK(const char* cmd, unsigned long timeout) {
   unsigned long start = millis();
   String resp = "";
   while (millis() - start < timeout) {
+    esp_task_wdt_reset();
     if (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
@@ -198,6 +268,7 @@ bool waitCEREG() {
   unsigned long start = millis();
   String resp = "";
   while (millis() - start < 2000) {
+    esp_task_wdt_reset();
     if (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
@@ -238,13 +309,13 @@ bool sendSMS(const char* phoneNumber, const char* message) {
   while (Serial1.available()) Serial1.read();
   Serial1.println(cmgsCmd);
   
-  // 等待 > 提示符
+  // 等待 > 提示符（不再逐字符写日志：模组回显会产生海量小 String 分配并刷爆日志环形缓冲）
   unsigned long start = millis();
   bool gotPrompt = false;
   while (millis() - start < 5000) {
+    esp_task_wdt_reset();
     if (Serial1.available()) {
       char c = Serial1.read();
-      logCapture(String(c));
       if (c == '>') {
         gotPrompt = true;
         break;
@@ -252,30 +323,30 @@ bool sendSMS(const char* phoneNumber, const char* message) {
     }
     server.handleClient();
   }
-  
+
   if (!gotPrompt) {
     logCaptureLn(String("未收到>提示符"));
     return false;
   }
-  
+
   // 发送PDU数据
   Serial1.print(pdu.getSMS());
   Serial1.write(0x1A);  // Ctrl+Z 结束
-  
+
   // 等待响应
   start = millis();
   String resp = "";
   while (millis() - start < 30000) {
+    esp_task_wdt_reset();
     while (Serial1.available()) {
       char c = Serial1.read();
       resp += c;
-      logCapture(String(c));
       if (resp.indexOf("OK") >= 0) {
-        logCaptureLn(String("\n短信发送成功"));
+        logCaptureLn(String("短信发送成功"));
         return true;
       }
       if (resp.indexOf("ERROR") >= 0) {
-        logCaptureLn(String("\n短信发送失败"));
+        logCaptureLn(String("短信发送失败: ") + resp);
         return false;
       }
     }

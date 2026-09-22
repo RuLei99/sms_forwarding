@@ -5,7 +5,10 @@
 #include "push.h"
 #include "wifi_config.h"
 #include "records.h"
+#include <esp_task_wdt.h>
 #include "health.h"
+#include "jobs.h"
+#include <LittleFS.h>
 
 // ---- 日志环形缓冲区 ----
 String logBuffer[LOG_BUF_SIZE];
@@ -14,7 +17,14 @@ int logBufCount = 0;
 static String _logLine;  // 行缓冲：logCapture 写入这里，logCaptureLn 提交整行
 
 static void _logAppend(const String& line) {
-  logBuffer[logBufIdx] = line;
+  // 截断防内存膨胀：PDU 调试行可达 700+ 字符，120 行环形缓冲全存长行时
+  // /log 序列化峰值会冲到 200KB+ 堆直接 OOM；日志截断到 200 字符不影响排障
+  if (line.length() > 200) {
+    String t = line.substring(0, 197) + "...";
+    logBuffer[logBufIdx] = t;
+  } else {
+    logBuffer[logBufIdx] = line;
+  }
   logBufIdx = (logBufIdx + 1) % LOG_BUF_SIZE;
   if (logBufCount < LOG_BUF_SIZE) logBufCount++;
 }
@@ -184,16 +194,11 @@ void handleRoot() {
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>推送方式</label>";
     channelsHtml += "<select name=\"push" + idx + "type\" id=\"push" + idx + "type\" onchange=\"updateTypeHint(" + idx + ")\">";
-    channelsHtml += "<option value=\"1\"" + String(config.pushChannels[i].type == PUSH_TYPE_POST_JSON ? " selected" : "") + ">POST JSON（通用格式）</option>";
-    channelsHtml += "<option value=\"2\"" + String(config.pushChannels[i].type == PUSH_TYPE_BARK ? " selected" : "") + ">Bark（iOS推送）</option>";
-    channelsHtml += "<option value=\"3\"" + String(config.pushChannels[i].type == PUSH_TYPE_GET ? " selected" : "") + ">GET请求（参数在URL中）</option>";
-    channelsHtml += "<option value=\"4\"" + String(config.pushChannels[i].type == PUSH_TYPE_DINGTALK ? " selected" : "") + ">钉钉机器人</option>";
-    channelsHtml += "<option value=\"5\"" + String(config.pushChannels[i].type == PUSH_TYPE_PUSHPLUS ? " selected" : "") + ">PushPlus</option>";
-    channelsHtml += "<option value=\"6\"" + String(config.pushChannels[i].type == PUSH_TYPE_SERVERCHAN ? " selected" : "") + ">Server酱</option>";
-    channelsHtml += "<option value=\"7\"" + String(config.pushChannels[i].type == PUSH_TYPE_CUSTOM ? " selected" : "") + ">自定义模板</option>";
-    channelsHtml += "<option value=\"8\"" + String(config.pushChannels[i].type == PUSH_TYPE_FEISHU ? " selected" : "") + ">飞书机器人</option>";
-    channelsHtml += "<option value=\"9\"" + String(config.pushChannels[i].type == PUSH_TYPE_GOTIFY ? " selected" : "") + ">Gotify</option>";
-    channelsHtml += "<option value=\"10\"" + String(config.pushChannels[i].type == PUSH_TYPE_TELEGRAM ? " selected" : "") + ">Telegram Bot</option>";
+    for (size_t ti = 0; ti < pushTypeCount(); ti++) {
+      PushType tt = (PushType)(ti + 1);
+      channelsHtml += "<option value=\"" + String((int)tt) + "\"" +
+                      String(config.pushChannels[i].type == tt ? " selected" : "") + ">" + pushTypeName(tt) + "</option>";
+    }
     channelsHtml += "</select>";
     channelsHtml += "<div class=\"push-type-hint\" id=\"hint" + idx + "\"></div>";
     channelsHtml += "</div>";
@@ -244,6 +249,12 @@ void handleRoot() {
     {"FILTER_KEYWORDS", config.filterKeywords},
     {"FLT_WL_SEL", config.filterWhitelist ? " selected" : ""},
     {"FLT_BL_SEL", config.filterWhitelist ? "" : " selected"},
+    {"TZ_HOURS", String(config.tzHours)},
+    {"REPORT_CHECKED", config.reportEnabled ? " checked" : ""},
+    {"WIFI1_SSID", config.wifi1Ssid},
+    {"WIFI1_PASS", config.wifi1Pass},
+    {"WIFI2_SSID", config.wifi2Ssid},
+    {"WIFI2_PASS", config.wifi2Pass},
     {"SMTP_CHECK", emailOk ? "已配置" : "未配置"},
     {"MODEM_CHECK", modemReady ? "已就绪" : "未就绪"},
     {"DATA_MODE", config.smsOnly ? "仅收短信（数据已锁定）" : "标准（数据未锁定）"},
@@ -270,7 +281,7 @@ void handleFlightMode() {
 
   if (action == "query") {
     // 查询当前功能模式
-    acquireModemPort("/flight query");
+    if (!acquireModemPort("/flight query")) return;
     logCaptureLn(String("网页端查询飞行模式: AT+CFUN?"));
     String resp = sendATCommand("AT+CFUN?", 2000);
     logCaptureLn(String("CFUN查询响应: " + resp));
@@ -302,7 +313,7 @@ void handleFlightMode() {
   }
   else if (action == "toggle") {
     // 先查询当前状态
-    acquireModemPort("/flight toggle");
+    if (!acquireModemPort("/flight toggle")) return;
     String resp = sendATCommand("AT+CFUN?", 2000);
     logCaptureLn(String("CFUN查询响应: " + resp));
 
@@ -336,7 +347,7 @@ void handleFlightMode() {
   }
   else if (action == "on") {
     // 强制开启飞行模式
-    acquireModemPort("/flight on");
+    if (!acquireModemPort("/flight on")) return;
     logCaptureLn(String("网页端强制开启飞行模式: AT+CFUN=4"));
     String resp = sendATCommand("AT+CFUN=4", 5000);
     releaseModemPort();
@@ -349,7 +360,7 @@ void handleFlightMode() {
   }
   else if (action == "off") {
     // 强制关闭飞行模式
-    acquireModemPort("/flight off");
+    if (!acquireModemPort("/flight off")) return;
     logCaptureLn(String("网页端关闭飞行模式: AT+CFUN=1"));
     String resp = sendATCommand("AT+CFUN=1", 5000);
     releaseModemPort();
@@ -374,397 +385,64 @@ void handleFlightMode() {
 // 处理AT指令测试请求
 void handleATCommand() {
   if (!checkAuth()) return;
-  if (!acquireModemPort("/at")) return;
 
   String cmd = server.arg("cmd");
-  bool success = false;
-  String message = "";
-
   if (cmd.length() == 0) {
-    message = "错误：指令不能为空";
-  } else {
-    logCaptureLn(String("网页端发送AT指令: " + cmd));
-    String resp = sendATCommand(cmd.c_str(), 5000);
-    logCaptureLn(String("模组响应: " + resp));
-
-    if (resp.length() > 0) {
-      success = true;
-      message = resp;
-    } else {
-      message = "超时或无响应";
-    }
+    server.send(200, "application/json", "{\"success\":false,\"message\":\"错误：指令不能为空\"}");
+    return;
   }
-  releaseModemPort();
-  
-  String json = "{";
-  json += "\"success\":" + String(success ? "true" : "false") + ",";
-  json += "\"message\":\"" + jsonEscape(message) + "\"";
-  json += "}";
-  
-  server.send(200, "application/json", json);
+  uint32_t id = jobsSubmit(MODEM_JOB_AT, cmd.c_str());
+  if (id == 0) {
+    server.send(200, "application/json", "{\"success\":false,\"message\":\"任务队列忙，请稍后重试\"}");
+    return;
+  }
+  logCaptureLn(String("AT 指令已入队（任务" + String(id) + "）: " + cmd));
+  server.send(200, "application/json",
+              ("{\"queued\":true,\"id\":" + String(id) + ",\"message\":\"指令已加入队列\"}").c_str());
 }
 
-// 处理模组信息查询请求
-void handleQuery() {
+// 任务状态轮询：/job?id=N → queued/running/done
+void handleJobStatus() {
   if (!checkAuth()) return;
-  if (!acquireModemPort("/query")) return;
-
-  String type = server.arg("type");
+  uint32_t id = (uint32_t)server.arg("id").toInt();
+  ModemResult r;
+  int st = jobsQuery(id, r);
   String json = "{";
-  bool success = false;
-  String message = "";
-  
-  if (type == "ati") {
-    // 固件信息查询
-    String resp = sendATCommand("ATI", 2000);
-    logCaptureLn(String("ATI响应: " + resp));
-    
-    if (resp.indexOf("OK") >= 0) {
-      success = true;
-      // 解析ATI响应
-      String manufacturer = "未知";
-      String model = "未知";
-      String version = "未知";
-      
-      // 按行解析
-      int lineStart = 0;
-      int lineNum = 0;
-      for (int i = 0; i < resp.length(); i++) {
-        if (resp.charAt(i) == '\n' || i == resp.length() - 1) {
-          String line = resp.substring(lineStart, i);
-          line.trim();
-          if (line.length() > 0 && line != "ATI" && line != "OK") {
-            lineNum++;
-            if (lineNum == 1) manufacturer = line;
-            else if (lineNum == 2) model = line;
-            else if (lineNum == 3) version = line;
-          }
-          lineStart = i + 1;
-        }
-      }
-      
-      message = "<table class='info-table'>";
-      message += "<tr><td>制造商</td><td>" + manufacturer + "</td></tr>";
-      message += "<tr><td>模组型号</td><td>" + model + "</td></tr>";
-      message += "<tr><td>固件版本</td><td>" + version + "</td></tr>";
-      message += "</table>";
-    } else {
-      message = "查询失败";
-    }
-  }
-  else if (type == "signal") {
-    // 信号质量查询
-    String resp = sendATCommand("AT+CESQ", 2000);
-    logCaptureLn(String("CESQ响应: " + resp));
-    
-    if (resp.indexOf("+CESQ:") >= 0) {
-      success = true;
-      // 解析 +CESQ: <rxlev>,<ber>,<rscp>,<ecno>,<rsrq>,<rsrp>
-      int idx = resp.indexOf("+CESQ:");
-      String params = resp.substring(idx + 6);
-      int endIdx = params.indexOf('\r');
-      if (endIdx < 0) endIdx = params.indexOf('\n');
-      if (endIdx > 0) params = params.substring(0, endIdx);
-      params.trim();
-      
-      // 分割参数
-      String values[6];
-      int valIdx = 0;
-      int startPos = 0;
-      for (int i = 0; i <= params.length() && valIdx < 6; i++) {
-        if (i == params.length() || params.charAt(i) == ',') {
-          values[valIdx] = params.substring(startPos, i);
-          values[valIdx].trim();
-          valIdx++;
-          startPos = i + 1;
-        }
-      }
-      
-      // RSRP转换为dBm (0-97映射到-140到-44 dBm, 99表示未知)
-      int rsrp = values[5].toInt();
-      String rsrpStr;
-      if (rsrp == 99 || rsrp == 255) {
-        rsrpStr = "未知";
-      } else {
-        int rsrpDbm = -140 + rsrp;
-        rsrpStr = String(rsrpDbm) + " dBm";
-        if (rsrpDbm >= -80) rsrpStr += " (信号极好)";
-        else if (rsrpDbm >= -90) rsrpStr += " (信号良好)";
-        else if (rsrpDbm >= -100) rsrpStr += " (信号一般)";
-        else if (rsrpDbm >= -110) rsrpStr += " (信号较弱)";
-        else rsrpStr += " (信号很差)";
-      }
-      
-      // RSRQ转换 (0-34映射到-19.5到-3 dB)
-      int rsrq = values[4].toInt();
-      String rsrqStr;
-      if (rsrq == 99 || rsrq == 255) {
-        rsrqStr = "未知";
-      } else {
-        float rsrqDb = -19.5 + rsrq * 0.5;
-        rsrqStr = String(rsrqDb, 1) + " dB";
-      }
-      
-      message = "<table class='info-table'>";
-      message += "<tr><td>信号强度 (RSRP)</td><td>" + rsrpStr + "</td></tr>";
-      message += "<tr><td>信号质量 (RSRQ)</td><td>" + rsrqStr + "</td></tr>";
-      message += "<tr><td>原始数据</td><td>" + params + "</td></tr>";
-      message += "</table>";
-    } else {
-      message = "查询失败";
-    }
-  }
-  else if (type == "siminfo") {
-    // SIM卡信息查询
-    success = true;
-    message = "<table class='info-table'>";
-    
-    // 查询IMSI
-    String resp = sendATCommand("AT+CIMI", 2000);
-    String imsi = "未知";
-    if (resp.indexOf("OK") >= 0) {
-      int start = resp.indexOf('\n');
-      if (start >= 0) {
-        int end = resp.indexOf('\n', start + 1);
-        if (end < 0) end = resp.indexOf('\r', start + 1);
-        if (end > start) {
-          imsi = resp.substring(start + 1, end);
-          imsi.trim();
-          if (imsi == "OK" || imsi.length() < 10) imsi = "未知";
-        }
-      }
-    }
-    message += "<tr><td>IMSI</td><td>" + imsi + "</td></tr>";
-    
-    // 查询ICCID
-    resp = sendATCommand("AT+ICCID", 2000);
-    String iccid = "未知";
-    if (resp.indexOf("+ICCID:") >= 0) {
-      int idx = resp.indexOf("+ICCID:");
-      String tmp = resp.substring(idx + 7);
-      int endIdx = tmp.indexOf('\r');
-      if (endIdx < 0) endIdx = tmp.indexOf('\n');
-      if (endIdx > 0) iccid = tmp.substring(0, endIdx);
-      iccid.trim();
-    }
-    message += "<tr><td>ICCID</td><td>" + iccid + "</td></tr>";
-    
-    // 查询本机号码 (如果SIM卡支持)
-    resp = sendATCommand("AT+CNUM", 2000);
-    String phoneNum = "未存储或不支持";
-    if (resp.indexOf("+CNUM:") >= 0) {
-      int idx = resp.indexOf(",\"");
-      if (idx >= 0) {
-        int endIdx = resp.indexOf("\"", idx + 2);
-        if (endIdx > idx) {
-          phoneNum = resp.substring(idx + 2, endIdx);
-        }
-      }
-    }
-    message += "<tr><td>本机号码</td><td>" + phoneNum + "</td></tr>";
-    
-    message += "</table>";
-  }
-  else if (type == "network") {
-    // 网络状态查询
-    success = true;
-    message = "<table class='info-table'>";
-    
-    // 查询网络注册状态
-    String resp = sendATCommand("AT+CEREG?", 2000);
-    String regStatus = "未知";
-    if (resp.indexOf("+CEREG:") >= 0) {
-      int idx = resp.indexOf("+CEREG:");
-      String tmp = resp.substring(idx + 7);
-      int commaIdx = tmp.indexOf(',');
-      if (commaIdx >= 0) {
-        String stat = tmp.substring(commaIdx + 1, commaIdx + 2);
-        int s = stat.toInt();
-        switch(s) {
-          case 0: regStatus = "未注册，未搜索"; break;
-          case 1: regStatus = "已注册，本地网络"; break;
-          case 2: regStatus = "未注册，正在搜索"; break;
-          case 3: regStatus = "注册被拒绝"; break;
-          case 4: regStatus = "未知"; break;
-          case 5: regStatus = "已注册，漫游"; break;
-          default: regStatus = "状态码: " + stat;
-        }
-      }
-    }
-    message += "<tr><td>网络注册</td><td>" + regStatus + "</td></tr>";
-    
-    // 查询运营商
-    resp = sendATCommand("AT+COPS?", 2000);
-    String oper = "未知";
-    if (resp.indexOf("+COPS:") >= 0) {
-      int idx = resp.indexOf(",\"");
-      if (idx >= 0) {
-        int endIdx = resp.indexOf("\"", idx + 2);
-        if (endIdx > idx) {
-          oper = resp.substring(idx + 2, endIdx);
-        }
-      }
-    }
-    message += "<tr><td>运营商</td><td>" + oper + "</td></tr>";
-    
-    // 查询PDP上下文激活状态
-    resp = sendATCommand("AT+CGACT?", 2000);
-    String pdpStatus = "未激活";
-    if (resp.indexOf("+CGACT: 1,1") >= 0) {
-      pdpStatus = "已激活";
-    } else if (resp.indexOf("+CGACT:") >= 0) {
-      pdpStatus = "未激活";
-    }
-    message += "<tr><td>数据连接</td><td>" + pdpStatus + "</td></tr>";
-    
-    // 查询APN
-    resp = sendATCommand("AT+CGDCONT?", 2000);
-    String apn = "未知";
-    if (resp.indexOf("+CGDCONT:") >= 0) {
-      int idx = resp.indexOf(",\"");
-      if (idx >= 0) {
-        idx = resp.indexOf(",\"", idx + 2);  // 跳过PDP类型
-        if (idx >= 0) {
-          int endIdx = resp.indexOf("\"", idx + 2);
-          if (endIdx > idx) {
-            apn = resp.substring(idx + 2, endIdx);
-            if (apn.length() == 0) apn = "(自动)";
-          }
-        }
-      }
-    }
-    message += "<tr><td>APN</td><td>" + apn + "</td></tr>";
-    
-    message += "</table>";
-  }
-  else if (type == "wifi") {
-    // WiFi状态查询
-    success = true;
-    message = "<table class='info-table'>";
-    
-    // WiFi连接状态
-    String wifiStatus = WiFi.isConnected() ? "已连接" : "未连接";
-    message += "<tr><td>连接状态</td><td>" + wifiStatus + "</td></tr>";
-    
-    // SSID
-    String ssid = WiFi.SSID();
-    if (ssid.length() == 0) ssid = "未知";
-    message += "<tr><td>当前SSID</td><td>" + ssid + "</td></tr>";
-    
-    // 信号强度 RSSI
-    int rssi = WiFi.RSSI();
-    String rssiStr = String(rssi) + " dBm";
-    if (rssi >= -50) rssiStr += " (信号极好)";
-    else if (rssi >= -60) rssiStr += " (信号很好)";
-    else if (rssi >= -70) rssiStr += " (信号良好)";
-    else if (rssi >= -80) rssiStr += " (信号一般)";
-    else if (rssi >= -90) rssiStr += " (信号较弱)";
-    else rssiStr += " (信号很差)";
-    message += "<tr><td>信号强度 (RSSI)</td><td>" + rssiStr + "</td></tr>";
-    
-    // IP地址
-    message += "<tr><td>IP地址</td><td>" + WiFi.localIP().toString() + "</td></tr>";
-    
-    // 网关
-    message += "<tr><td>网关</td><td>" + WiFi.gatewayIP().toString() + "</td></tr>";
-    
-    // 子网掩码
-    message += "<tr><td>子网掩码</td><td>" + WiFi.subnetMask().toString() + "</td></tr>";
-    
-    // DNS
-    message += "<tr><td>DNS服务器</td><td>" + WiFi.dnsIP().toString() + "</td></tr>";
-    
-    // MAC地址
-    message += "<tr><td>MAC地址</td><td>" + WiFi.macAddress() + "</td></tr>";
-    
-    // BSSID (路由器MAC)
-    message += "<tr><td>路由器BSSID</td><td>" + WiFi.BSSIDstr() + "</td></tr>";
-    
-    // 信道
-    message += "<tr><td>WiFi信道</td><td>" + String(WiFi.channel()) + "</td></tr>";
-    
-    message += "</table>";
-  }
-  else {
-    message = "未知的查询类型";
-  }
-  releaseModemPort();
-
-  json += "\"success\":" + String(success ? "true" : "false") + ",";
-  json += "\"message\":\"" + jsonEscape(message) + "\"";
+  if (st == 0)      json += "\"state\":\"queued\",\"success\":false,\"message\":\"排队中...\"";
+  else if (st == 1) json += "\"state\":\"running\",\"success\":false,\"message\":\"执行中...\"";
+  else if (st == 2) json += String("\"state\":\"done\",\"success\":") + (r.success ? "true" : "false") +
+                            ",\"message\":\"" + jsonEscape(String(r.message)) + "\"";
+  else              json += "\"state\":\"unknown\",\"success\":false,\"message\":\"任务不存在或结果已过期\"";
   json += "}";
-
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.send(200, "application/json", json);
 }
 
 // 处理发送短信请求
 void handleSendSms() {
   if (!checkAuth()) return;
-  if (!acquireModemPort("/sendsms")) return;
 
   String phone = server.arg("phone");
   String content = server.arg("content");
-
   phone.trim();
   content.trim();
 
-  bool success = false;
-  String resultMsg = "";
-
-  if (phone.length() == 0) {
-    resultMsg = "错误：请输入目标号码";
-  } else if (content.length() == 0) {
-    resultMsg = "错误：请输入短信内容";
-  } else {
-    logCaptureLn(String("网页端发送短信请求"));
-    logCaptureLn(String("目标号码: " + phone));
-    logCaptureLn(String("短信内容: " + content));
-
-    success = sendSMS(phone.c_str(), content.c_str());
-    resultMsg = success ? "短信发送成功！" : "短信发送失败，请检查模组状态";
+  if (phone.length() == 0 || content.length() == 0) {
+    server.send(200, "application/json", "{\"success\":false,\"message\":\"请填写目标号码和短信内容\"}");
+    return;
   }
-  releaseModemPort();
-  
-  String html = R"rawliteral(
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="refresh" content="3;url=/sms">
-  <title>发送结果</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Roboto, Arial, sans-serif;
-      min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      -webkit-font-smoothing: antialiased;
-    }
-    .result {
-      background: rgba(255,255,255,0.72);
-      -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
-      border: 1px solid rgba(0,0,0,0.06);
-      border-radius: 18px; padding: 36px 44px; text-align: center; max-width: 360px;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.08);
-    }
-    .success h2 { color: #1d7a36; }
-    .error h2 { color: #c0271d; }
-    h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 6px; }
-    p { font-size: 13px; color: #6e6e73; }
-  </style>
-</head>
-<body>
-  <div class="result %CLASS%">
-    <h2>%MSG%</h2>
-    <p>3秒后返回发送页面...</p>
-  </div>
-</body>
-</html>
-)rawliteral";
-
-  html.replace("%CLASS%", success ? "success" : "error");
-  html.replace("%MSG%", resultMsg);
-  
-  server.send(200, "text/html", html);
+  if (content.length() >= MODEM_JOB_ARG2_SIZE) {
+    server.send(200, "application/json", "{\"success\":false,\"message\":\"内容过长（超长短信暂不支持网页发送）\"}");
+    return;
+  }
+  uint32_t id = jobsSubmit(MODEM_JOB_SEND_SMS, phone.c_str(), content.c_str());
+  if (id == 0) {
+    server.send(200, "application/json", "{\"success\":false,\"message\":\"任务队列忙，请稍后重试\"}");
+    return;
+  }
+  logCaptureLn(String("网页发短信已入队（任务" + String(id) + "）→ " + phone));
+  server.send(200, "application/json",
+              ("{\"queued\":true,\"id\":" + String(id) + ",\"message\":\"短信已加入发送队列\"}").c_str());
 }
 
 // 处理Ping请求
@@ -778,180 +456,13 @@ void handlePing() {
     server.send(200, "application/json", "{\"success\":false,\"message\":\"仅收短信模式已锁定数据连接，Ping 会临时开启数据、可能产生漫游流量。如确需使用，请先在“模组控制”页关闭“仅收短信模式”。\"}");
     return;
   }
-  if (!acquireModemPort("/ping")) return;
-
-  logCaptureLn(String("网页端发起Ping请求"));
-  
-  // 清空串口缓冲区
-  while (Serial1.available()) Serial1.read();
-  
-  // 激活PDP上下文（数据连接）
-  logCaptureLn(String("激活数据连接(CGACT)..."));
-  String activateResp = sendATCommand("AT+CGACT=1,1", 10000);
-  logCaptureLn(String("CGACT响应: " + activateResp));
-  
-  // 检查激活是否成功（OK或已激活的情况）
-  bool networkActivated = (activateResp.indexOf("OK") >= 0);
-  if (!networkActivated) {
-    logCaptureLn(String("数据连接激活失败，尝试继续执行..."));
+  uint32_t id = jobsSubmit(MODEM_JOB_PING);
+  if (id == 0) {
+    server.send(200, "application/json", "{\"success\":false,\"message\":\"任务队列忙，请稍后重试\"}");
+    return;
   }
-  
-  // 清空串口缓冲区
-  while (Serial1.available()) Serial1.read();
-  delay(500);  // 等待网络稳定
-  
-  // 发送MPING命令，ping 8.8.8.8，超时30秒，ping 1次
-  Serial1.println("AT+MPING=\"8.8.8.8\",30,1");
-  
-  // 等待响应
-  unsigned long start = millis();
-  String resp = "";
-  bool gotOK = false;
-  bool gotError = false;
-  bool gotPingResult = false;
-  String pingResultMsg = "";
-  
-  // 等待最多35秒（30秒超时 + 5秒余量）
-  while (millis() - start < 35000) {
-    while (Serial1.available()) {
-      char c = Serial1.read();
-      resp += c;
-      
-      // 检查是否收到OK
-      if (resp.indexOf("OK") >= 0 && !gotOK) {
-        gotOK = true;
-      }
-      
-      // 检查是否收到ERROR
-      if (resp.indexOf("+CME ERROR") >= 0 || resp.indexOf("ERROR") >= 0) {
-        gotError = true;
-        pingResultMsg = "模组返回错误";
-        break;
-      }
-      
-      // 检查是否收到Ping结果URC
-      // 成功格式: +MPING: 1,8.8.8.8,32,xxx,xxx
-      // 失败格式: +MPING: 2 或其他
-      int mpingIdx = resp.indexOf("+MPING:");
-      if (mpingIdx >= 0) {
-        // 找到换行符确定完整的一行
-        int lineEnd = resp.indexOf('\n', mpingIdx);
-        if (lineEnd >= 0) {
-          String mpingLine = resp.substring(mpingIdx, lineEnd);
-          mpingLine.trim();
-          logCaptureLn(String("收到MPING结果: " + mpingLine));
-          
-          // 解析结果
-          // +MPING: <result>[,<ip>,<packet_len>,<time>,<ttl>]
-          int colonIdx = mpingLine.indexOf(':');
-          if (colonIdx >= 0) {
-            String params = mpingLine.substring(colonIdx + 1);
-            params.trim();
-            
-            // 获取第一个参数（result）
-            int commaIdx = params.indexOf(',');
-            String resultStr;
-            if (commaIdx >= 0) {
-              resultStr = params.substring(0, commaIdx);
-            } else {
-              resultStr = params;
-            }
-            resultStr.trim();
-            int result = resultStr.toInt();
-            
-            gotPingResult = true;
-            
-            // result=0或1都表示成功（不同模组可能返回不同值）
-            // 如果有完整的响应参数（IP、时间等），也视为成功
-            bool pingSuccess = (result == 0 || result == 1) || (params.indexOf(',') >= 0 && params.length() > 5);
-            
-            if (pingSuccess) {
-              // 成功，解析详细信息
-              // 格式: 0/1,"8.8.8.8",16,时间,TTL
-              int idx1 = params.indexOf(',');
-              if (idx1 >= 0) {
-                String rest = params.substring(idx1 + 1);
-                // 处理IP地址（可能带引号）
-                String ip;
-                int idx2;
-                if (rest.startsWith("\"")) {
-                  // 带引号的IP
-                  int quoteEnd = rest.indexOf('\"', 1);
-                  if (quoteEnd >= 0) {
-                    ip = rest.substring(1, quoteEnd);
-                    idx2 = rest.indexOf(',', quoteEnd);
-                  } else {
-                    idx2 = rest.indexOf(',');
-                    ip = rest.substring(0, idx2);
-                  }
-                } else {
-                  idx2 = rest.indexOf(',');
-                  ip = rest.substring(0, idx2);
-                }
-                
-                if (idx2 >= 0) {
-                  rest = rest.substring(idx2 + 1);
-                  int idx3 = rest.indexOf(',');  // packet_len后
-                  if (idx3 >= 0) {
-                    rest = rest.substring(idx3 + 1);
-                    int idx4 = rest.indexOf(',');  // time后
-                    String timeStr, ttlStr;
-                    if (idx4 >= 0) {
-                      timeStr = rest.substring(0, idx4);
-                      ttlStr = rest.substring(idx4 + 1);
-                    } else {
-                      timeStr = rest;
-                      ttlStr = "N/A";
-                    }
-                    timeStr.trim();
-                    ttlStr.trim();
-                    pingResultMsg = "目标: " + ip + ", 延迟: " + timeStr + "ms, TTL: " + ttlStr;
-                  }
-                }
-              }
-              if (pingResultMsg.length() == 0) {
-                pingResultMsg = "Ping成功";
-              }
-            } else {
-              // 失败
-              pingResultMsg = "Ping超时或目标不可达 (错误码: " + String(result) + ")";
-            }
-            break;
-          }
-        }
-      }
-    }
-    
-    if (gotError || gotPingResult) break;
-    server.handleClient();
-  }
-  
-  logCaptureLn(String("\nPing操作完成"));
-  
-  // 关闭数据连接以节省流量
-  logCaptureLn(String("关闭PDP上下文(CGACT=0)..."));
-  String deactivateResp = sendATCommand("AT+CGACT=0,1", 5000);
-  logCaptureLn(String("CGACT关闭响应: " + deactivateResp));
-  releaseModemPort();
-  
-  // 构建JSON响应
-  String json = "{";
-  if (gotPingResult && pingResultMsg.indexOf("延迟") >= 0) {
-    json += "\"success\":true,";
-    json += "\"message\":\"" + pingResultMsg + "\"";
-  } else if (gotError) {
-    json += "\"success\":false,";
-    json += "\"message\":\"" + pingResultMsg + "\"";
-  } else if (gotPingResult) {
-    json += "\"success\":false,";
-    json += "\"message\":\"" + pingResultMsg + "\"";
-  } else {
-    json += "\"success\":false,";
-    json += "\"message\":\"操作超时，未收到Ping结果\"";
-  }
-  json += "}";
-  
-  server.send(200, "application/json", json);
+  server.send(200, "application/json",
+              ("{\"queued\":true,\"id\":" + String(id) + ",\"message\":\"Ping 已加入队列（最长约 35 秒）\"}").c_str());
 }
 
 // 处理保存配置请求
@@ -959,15 +470,15 @@ void handleSave() {
   if (!checkAuth()) return;
 
   // 账号管理表单：只在字段存在时更新
+  // 空用户名/密码不回退默认值而是保留旧值 —— 否则清空保存会静默把密码重置为弱默认密码
   if (server.hasArg("webUser")) {
     String newWebUser = server.arg("webUser");
-    if (newWebUser.length() == 0) newWebUser = DEFAULT_WEB_USER;
-    config.webUser = newWebUser;
+    newWebUser.trim();
+    if (newWebUser.length() > 0) config.webUser = newWebUser;
   }
   if (server.hasArg("webPass")) {
     String newWebPass = server.arg("webPass");
-    if (newWebPass.length() == 0) newWebPass = DEFAULT_WEB_PASS;
-    config.webPass = newWebPass;
+    if (newWebPass.length() > 0) config.webPass = newWebPass;
   }
 
   // 邮件通知表单：只在字段存在时更新
@@ -976,7 +487,7 @@ void handleSave() {
   }
   if (server.hasArg("smtpPort")) {
     config.smtpPort = server.arg("smtpPort").toInt();
-    if (config.smtpPort == 0) config.smtpPort = 465;
+    if (config.smtpPort <= 0 || config.smtpPort > 65535) config.smtpPort = DEFAULT_SMTP_PORT;
   }
   if (server.hasArg("smtpUser")) {
     config.smtpUser = server.arg("smtpUser");
@@ -1004,6 +515,36 @@ void handleSave() {
     config.filterWhitelist = (server.arg("filterMode") == "whitelist");
   }
 
+  // 时区与每日报告（管理员表单）
+  if (server.hasArg("tzHours")) {
+    int tz = server.arg("tzHours").toInt();
+    if (tz < -12 || tz > 14) tz = 8;
+    config.tzHours = tz;
+    char tzBuf[16];
+    snprintf(tzBuf, sizeof(tzBuf), "UTC%d", -config.tzHours);  // POSIX TZ 符号与实际相反
+    setenv("TZ", tzBuf, 1);
+    tzset();
+  }
+  if (server.hasArg("reportEnabled")) {
+    config.reportEnabled = (server.arg("reportEnabled") == "on");
+  }
+
+  // 主 WiFi（网络测试表单）：留空 = 恢复使用固件内置 wifi_config.h
+  if (server.hasArg("wifi1Ssid")) {
+    config.wifi1Ssid = server.arg("wifi1Ssid");
+    config.wifi1Ssid.trim();
+    if (server.hasArg("wifi1Pass")) config.wifi1Pass = server.arg("wifi1Pass");
+    if (config.wifi1Ssid.length() == 0) config.wifi1Pass = "";
+  }
+
+  // 备用 WiFi（网络测试表单）
+  if (server.hasArg("wifi2Ssid")) {
+    config.wifi2Ssid = server.arg("wifi2Ssid");
+    config.wifi2Ssid.trim();
+    config.wifi2Pass = server.hasArg("wifi2Pass") ? server.arg("wifi2Pass") : config.wifi2Pass;
+    if (config.wifi2Ssid.length() == 0) config.wifi2Pass = "";  // 关闭热备时清密码
+  }
+
   // 推送通道配置：只在对应通道的字段存在时更新
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     String idx = String(i);
@@ -1019,7 +560,10 @@ void handleSave() {
         server.hasArg(nameKey) || server.hasArg(k1Key) || server.hasArg(k2Key) ||
         server.hasArg(bodyKey)) {
       config.pushChannels[i].enabled = server.arg(enKey) == "on";
-      config.pushChannels[i].type = (PushType)server.arg(typeKey).toInt();
+      int rawType = server.arg(typeKey).toInt();
+      // 表单外的非法类型值直接丢弃回退，避免脏 enum 存入 NVS 后推送异常
+      if (rawType < PUSH_TYPE_MIN || rawType > PUSH_TYPE_MAX) rawType = PUSH_TYPE_POST_JSON;
+      config.pushChannels[i].type = (PushType)rawType;
       config.pushChannels[i].url = server.arg(urlKey);
       config.pushChannels[i].name = server.arg(nameKey);
       config.pushChannels[i].key1 = server.arg(k1Key);
@@ -1054,7 +598,9 @@ void handleSave() {
 void handleLog() {
   if (!checkAuth()) return;
 
-  String json = "[";
+  String json;
+  json.reserve(4096 + logBufCount * 32);  // 减少多次 += 触发的 realloc/拷贝
+  json = "[";
   int total = logBufCount;
   int start = total < LOG_BUF_SIZE ? 0 : logBufIdx;
   for (int i = 0; i < total; i++) {
@@ -1080,83 +626,65 @@ void handleModem() {
   bool success = false;
   String message = "";
 
-  if (action == "restart") {
-    // AT 软重启 — 先响应浏览器再初始化，防止浏览器超时重试
-    logCaptureLn(String("网页端请求软重启模组..."));
-    server.send(200, "application/json", "{\"success\":true,\"message\":\"正在软重启模组，请等待约 15 秒后刷新页面\"}");
-    String resp = sendATCommand("AT+CFUN=1,1", 15000);
-    success = (resp.indexOf("OK") >= 0);
-    message = success ? "模组软重启成功" : "软重启失败";
-    logCaptureLn(String(message + ": " + resp));
-    if (success) modemInit();
-    releaseModemPort();
-    return;
-  }
-  else if (action == "hardreset") {
-    // EN 引脚断电重启（内部已调用 modemInit()）
-    logCaptureLn(String("网页端请求硬重启模组..."));
-    server.send(200, "application/json", "{\"success\":true,\"message\":\"正在硬重启模组，请等待约 15 秒后刷新页面\"}");
-    resetModule();
-    releaseModemPort();  // 必须释放，否则此后所有模组请求都会被 429 拒绝
+  if (action == "restart" || action == "hardreset") {
+    // 重启类操作入队后立即响应，loop 中由任务队列执行（浏览器不再挂着等）
+    ModemJobType jt = (action == "restart") ? MODEM_JOB_SOFT_RESET : MODEM_JOB_HARD_RESET;
+    releaseModemPort();  // 释放同步占用的锁，改由任务队列在执行时持有
+    uint32_t id = jobsSubmit(jt);
+    if (id == 0) {
+      server.send(200, "application/json", "{\"success\":false,\"message\":\"任务队列忙，请稍后重试\"}");
+      return;
+    }
+    logCaptureLn(String(("网页端请求" + String(action == "restart" ? "软" : "硬") + "重启模组（任务" + String(id) + "）...")));
+    server.send(200, "application/json",
+                ("{\"queued\":true,\"id\":" + String(id) +
+                 ",\"message\":\"正在" + String(action == "restart" ? "软" : "硬") +
+                 "重启模组，请等待约 15 秒后刷新页面\"}").c_str());
     return;
   }
   else if (action == "signal") {
     logCaptureLn(String("网页端查询信号: AT+CSQ"));
     String resp = sendATCommand("AT+CSQ", 3000);
+    int ber = -1;
     int csqIdx = resp.indexOf("+CSQ:");
-    if (csqIdx >= 0) {
-      String csqLine = resp.substring(csqIdx);
-      csqLine = csqLine.substring(0, csqLine.indexOf('\n'));
-      csqLine.trim();
-      int commaIdx = csqLine.indexOf(',');
-      if (commaIdx >= 0) {
-        int rssi = csqLine.substring(csqLine.indexOf(':') + 1, commaIdx).toInt();
-        int ber = csqLine.substring(commaIdx + 1).toInt();
-        int dbm = (rssi == 99) ? -999 : (-113 + rssi * 2);
-        String quality;
-        if (rssi >= 19) quality = "优秀";
-        else if (rssi >= 14) quality = "良好";
-        else if (rssi >= 10) quality = "一般";
-        else if (rssi >= 5) quality = "较差";
-        else quality = "很差";
-        message = "RSRP: " + String(dbm) + " dBm (" + quality + "), RSSI: " + String(rssi) + ", BER: " + String(ber);
-        success = true;
-      }
+    int commaIdx = resp.indexOf(',', csqIdx);
+    if (commaIdx >= 0) ber = resp.substring(commaIdx + 1).toInt();
+    int dbm;
+    if (modemParseCsq(resp, dbm)) {
+      String quality;
+      if (dbm >= -75) quality = "优秀";
+      else if (dbm >= -85) quality = "良好";
+      else if (dbm >= -95) quality = "一般";
+      else if (dbm >= -105) quality = "较差";
+      else quality = "很差";
+      message = "RSSI: " + String(dbm) + " dBm (" + quality + ")" +
+                (ber >= 0 ? ", BER: " + String(ber) : "");
+      success = true;
+      modemSignalCache = String(dbm) + " dBm";  // 手动查询成功顺带刷新概览缓存
     }
     if (!success) message = "无法获取信号: " + resp;
   }
   else if (action == "operator") {
     logCaptureLn(String("网页端查询运营商: AT+COPS?"));
     String resp = sendATCommand("AT+COPS?", 5000);
-    int copsIdx = resp.indexOf("+COPS:");
-    if (copsIdx >= 0) {
-      String copsLine = resp.substring(copsIdx);
-      copsLine = copsLine.substring(0, copsLine.indexOf('\n'));
-      copsLine.trim();
-      int q1 = copsLine.indexOf('"');
-      int q2 = copsLine.indexOf('"', q1 + 1);
-      if (q1 >= 0 && q2 >= 0) {
-        message = copsLine.substring(q1 + 1, q2);
-        success = true;
-      } else {
-        message = copsLine;
-        success = true;
-      }
+    String op = modemParseCops(resp);
+    if (op.length() > 0) {
+      message = op;
+      success = true;
+      modemOperatorCache = op;  // 顺带刷新概览缓存
+    } else if (resp.indexOf("+COPS:") >= 0) {
+      message = resp.substring(resp.indexOf("+COPS:"), resp.indexOf('\n') > 0 ? resp.indexOf('\n') : (unsigned int)resp.length());
+      success = true;
     }
     if (!success) message = "无法获取运营商: " + resp;
   }
   else if (action == "imei") {
     logCaptureLn(String("网页端查询IMEI: AT+GSN"));
-    String resp = sendATCommand("AT+GSN", 3000);
-    resp.trim();
-    int okIdx = resp.lastIndexOf("OK");
-    if (okIdx > 0) resp = resp.substring(0, okIdx);
-    int gsnIdx = resp.indexOf("AT+GSN");
-    if (gsnIdx >= 0) resp = resp.substring(gsnIdx + 6);
-    resp.trim();
-    if (resp.length() > 0) {
-      message = resp;
+    String imei = modemQueryImei();
+    if (imei.length() > 0) {
+      message = imei;
       success = true;
+      modemImeiCache = imei;  // 顺带刷新概览缓存
     } else {
       message = "无法获取 IMEI";
     }
@@ -1192,10 +720,13 @@ void handleWifi() {
     WiFi.setSleep(false);
     WiFi.setAutoReconnect(true);
     WiFi.setScanMethod(WIFI_FAST_SCAN);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    logCaptureLn(String("正在重新连接WiFi: " + String(WIFI_SSID)));
+    const char* rs; const char* rp;
+    getPrimaryWifi(rs, rp);
+    WiFi.begin(rs, rp);
+    logCaptureLn(String("正在重新连接WiFi: " + String(rs)));
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+      esp_task_wdt_reset();
       delay(50);
       server.handleClient();
     }
@@ -1275,9 +806,15 @@ void handleStatus() {
   json += "\"uptime\":\"" + String(upBuf) + "\",";
   json += "\"modem\":" + String(modemReady ? "true" : "false") + ",";
   json += "\"signal\":\"" + jsonEscape(modemSignalCache) + "\",";
+  json += "\"operator\":\"" + jsonEscape(modemOperatorCache) + "\",";
+  json += "\"imei\":\"" + jsonEscape(modemImeiCache) + "\",";
+  json += "\"iccid\":\"" + jsonEscape(modemIccidCache) + "\",";
+  json += "\"model\":\"" + jsonEscape(modemModelCache) + "\",";
+  json += "\"fw\":\"" + jsonEscape(modemFwCache) + "\",";
   json += "\"smsOnly\":" + String(config.smsOnly ? "true" : "false") + ",";
   json += "\"email\":" + String(emailOk ? "true" : "false") + ",";
-  json += "\"push\":" + String(pushCount);
+  json += "\"push\":" + String(pushCount) + ",";
+  json += "\"channels\":" + pushChannelStatsJson();
   json += "}";
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.send(200, "application/json", json);
@@ -1321,7 +858,7 @@ void handleTestPush() {
       ts = b;
     }
     ok = sendToChannel(config.pushChannels[ch], "测试",
-                       "这是一条来自 Web 管理页的测试推送", ts.c_str());
+                       "这是一条来自 Web 管理页的测试推送", ts.c_str(), ch);
     message = ok ? "测试推送已发出，请到对应平台查收" : "测试推送失败，请到系统日志查看原因";
   }
 
@@ -1330,4 +867,83 @@ void handleTestPush() {
   json += "\"message\":\"" + jsonEscape(message) + "\"";
   json += "}";
   server.send(200, "application/json", json);
+}
+
+// CSV 字段转义：含逗号/引号/换行的字段包引号，内部引号翻倍
+static String csvField(const String& s) {
+  bool needQuote = s.indexOf(',') >= 0 || s.indexOf('"') >= 0 || s.indexOf('\n') >= 0;
+  if (!needQuote) return s;
+  String r = "\"";
+  for (unsigned int i = 0; i < s.length(); i++) {
+    if (s.charAt(i) == '"') r += "\"\"";
+    else r += s.charAt(i);
+  }
+  r += "\"";
+  return r;
+}
+
+// 短信记录导出 CSV（全量历史，含 UTF-8 BOM，Excel 打开中文不乱码）
+void handleRecordsExport() {
+  if (!checkAuth()) return;
+  logCaptureLn(String("网页端导出短信记录 CSV"));
+  server.sendHeader("Content-Disposition", "attachment; filename=sms_records.csv");
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/csv", "");
+  server.sendContent("\xEF\xBB\xBF");  // UTF-8 BOM
+  server.sendContent("sender,timestamp,text,email_ok,push_mask,push_enabled\n");
+
+  for (int pass = 0; pass < 2; pass++) {
+    const char* path = (pass == 0) ? RECORDS_OLD : RECORDS_FILE;
+    if (!LittleFS.exists(path)) continue;
+    File f = LittleFS.open(path, "r");
+    if (!f) continue;
+    while (f.available()) {
+      String line = f.readStringUntil('\n');
+      line.trim();
+      if (line.length() == 0) continue;
+      // TSV → CSV：按 tab 切 6 字段
+      String fields[6];
+      int fi = 0, start = 0;
+      while (fi < 5) {
+        int tab = line.indexOf('\t', start);
+        if (tab < 0) break;
+        fields[fi++] = line.substring(start, tab);
+        start = tab + 1;
+      }
+      fields[fi] = line.substring(start);
+      if (fi < 5) continue;
+      String csv = csvField(fields[0]) + "," + csvField(fields[2]) + "," + csvField(fields[1]) + "," +
+                   fields[3] + "," + fields[4] + "," + fields[5] + "\n";
+      server.sendContent(csv);
+    }
+    f.close();
+  }
+  server.sendContent("");  // 结束 chunked 响应
+}
+
+// 配置导出 JSON（?plain=1 含密钥，默认打码）
+void handleConfigExport() {
+  if (!checkAuth()) return;
+  bool plain = (server.hasArg("plain") && server.arg("plain") == "1");
+  logCaptureLn(String(plain ? "导出配置（含密钥）" : "导出配置（密钥打码）"));
+  server.sendHeader("Content-Disposition", "attachment; filename=sms_config.json");
+  server.send(200, "application/json", configToJson(!plain));
+}
+
+// 配置导入 JSON（POST body）
+void handleConfigImport() {
+  if (!checkAuth()) return;
+  String body = server.arg("plain");  // WebServer 把 POST 原始 body 放在 "plain"
+  if (body.length() == 0) {
+    server.send(200, "application/json", "{\"success\":false,\"message\":\"请求体为空\"}");
+    return;
+  }
+  logCaptureLn(String("网页端导入配置（") + String(body.length()) + " 字节）");
+  String err = configFromJson(body);
+  if (err.length() > 0) {
+    server.send(200, "application/json", "{\"success\":false,\"message\":\"" + jsonEscape(err) + "\"}");
+    return;
+  }
+  configValid = isConfigValid();
+  server.send(200, "application/json", "{\"success\":true,\"message\":\"配置已恢复并保存，页面即将刷新\"}");
 }

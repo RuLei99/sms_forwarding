@@ -15,7 +15,9 @@ enum PushType {
   PUSH_TYPE_CUSTOM = 7,    // 自定义模板
   PUSH_TYPE_FEISHU = 8,    // 飞书机器人
   PUSH_TYPE_GOTIFY = 9,    // Gotify
-  PUSH_TYPE_TELEGRAM = 10  // Telegram Bot
+  PUSH_TYPE_TELEGRAM = 10, // Telegram Bot
+  PUSH_TYPE_NTFY = 11,     // ntfy（自建/官方推送服务）
+  PUSH_TYPE_MQTT = 12      // MQTT publish（Home Assistant 等联动）
 };
 
 // 最大推送通道数
@@ -47,11 +49,24 @@ struct Config {
   bool smsOnly;        // 仅收短信模式：锁定模组数据连接（去激活PDP），Ping被禁用，防止漫游流量扣费
   bool filterWhitelist;    // 关键词过滤模式：true=白名单（仅转发命中），false=黑名单（拦截命中）
   String filterKeywords;   // 过滤关键词，每行一个；留空=不过滤
+  int tzHours;             // 时区（小时，-12~14）：每日报告触发时间用，默认 8（北京时间）
+  bool reportEnabled;      // 每日 8 点健康报告（邮件 + 所有有效推送通道），默认开
+  String wifi1Ssid;        // 主 WiFi SSID（空=使用固件内置 wifi_config.h 宏）
+  String wifi1Pass;        // 主 WiFi 密码
+  String wifi2Ssid;        // 备用 WiFi SSID（空=不启用双 WiFi 热备）
+  String wifi2Pass;        // 备用 WiFi 密码
 };
 
 // 默认Web管理账号密码
 #define DEFAULT_WEB_USER "admin"
 #define DEFAULT_WEB_PASS "admin123"
+
+// 默认 SMTP 端口（加载/保存/前端占位符统一引用，避免魔法数字散落）
+#define DEFAULT_SMTP_PORT 465
+
+// Web 表单可保存的推送类型范围（与 PushType 枚举对应）
+#define PUSH_TYPE_MIN 1
+#define PUSH_TYPE_MAX 12
 
 // 长短信合并相关定义
 #define MAX_CONCAT_PARTS 10       // 最大支持的长短信分段数

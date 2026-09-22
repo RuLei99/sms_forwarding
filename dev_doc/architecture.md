@@ -86,13 +86,13 @@ checkAuth()               [web_handlers.cpp]
     │  密码: config.webPass
     ▼
 路由分发:
-    GET  /         → handleRoot()        SPA 主页 (HTML 模板变量替换，含 10 个面板)
+    GET  /         → handleRoot()        SPA 主页 (HTML 模板变量替换，含 11 个面板)
     GET  /tools    → handleRoot()        兼容旧链接，返回同一 SPA 页面
     GET  /sms      → handleRoot()        兼容旧链接，返回同一 SPA 页面
     POST /save     → handleSave()        保存配置 → saveConfig() → 发邮件
     POST /sendsms  → handleSendSms()     网页发送短信 → sendSMS()
     POST /ping     → handlePing()        AT+CGACT=1 → MPING → AT+CGACT=0
-    GET  /query    → handleQuery()       查询 ATI/CESQ/ICCID/CEREG 等
+    GET  /status   → handleStatus()       概览轮询 JSON（含模组信息缓存）
     GET  /flight   → handleFlightMode()  AT+CFUN 查询/切换飞行模式
     GET  /at       → handleATCommand()   透传 AT 指令到模组
     GET  /log      → handleLog()         返回环形缓冲区日志 (JSON 数组)
