@@ -7,17 +7,20 @@
 #include "config.h"
 
 String modemSignalCache = "";
-HealthDayStats dayStats = {0, 0, 0, 0, 0, 0, 0xFFFFFFFF};
 
 // WiFi 事件回调运行在 WiFi 任务上下文，不能直接写日志环形缓冲（非线程安全），
 // 只置标志，由 healthTask 在主循环里落日志
 static volatile bool wfDisconnected = false;
 static volatile bool wfGotIp = false;
+static volatile uint8_t wfDisconnectReason = 0;
 static unsigned long wifiDownSince = 0;  // WiFi 掉线起始时刻（0=在线）
 
-static void onWifiEvent(WiFiEvent_t event) {
+static void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   switch (event) {
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: wfDisconnected = true; break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      wfDisconnectReason = info.wifi_sta_disconnected.reason;
+      wfDisconnected = true;
+      break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:       wfGotIp = true; break;
     default: break;
   }
@@ -43,26 +46,55 @@ void healthTask() {
   }
   if (wfDisconnected) {
     wfDisconnected = false;
-    wifiDownSince = now;
-    logCaptureLn(String("WiFi 断开，自动重连中..."));
+    // 只在「在线→掉线」跳变时记录时刻：autoReconnect 重试风暴会连续发断开事件，
+    // 反复重置 wifiDownSince 会让 60 秒切网/10 秒主动重连永远不触发（实测踩坑）
+    if (wifiDownSince == 0) {
+      wifiDownSince = now;
+      logCaptureLn(String("WiFi 断开(reason=") +
+                   WiFi.disconnectReasonName((wifi_err_reason_t)wfDisconnectReason) +
+                   ")，自动重连中...");
+    }
   }
 
   // ---- 双 WiFi 热备：掉线超过 60 秒切到另一个 SSID（autoReconnect 只重试同一 AP） ----
   static bool onBackupWifi = false;
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiDownSince == 0) wifiDownSince = now;
-    if (config.wifi2Ssid.length() > 0 && now - wifiDownSince >= 60000UL) {
+    // autoReconnect 在 AUTH_EXPIRE/供电抖动后偶尔停留在断开态，主动踢一次状态机。
+    static unsigned long lastReconnect = 0;
+    if (now - wifiDownSince >= 10000UL && now - lastReconnect >= 10000UL) {
+      lastReconnect = now;
+      WiFi.reconnect();
+      logCaptureLn(String("WiFi 主动重连..."));
+    }
+    const char* bakSsid = "";
+    const char* bakPass = "";
+    getBackupWifi(bakSsid, bakPass);
+    if (strlen(bakSsid) > 0 && now - wifiDownSince >= 60000UL) {
       onBackupWifi = !onBackupWifi;
       const char* ssid; const char* pass;
       if (onBackupWifi) {
-        ssid = config.wifi2Ssid.c_str();
-        pass = config.wifi2Pass.c_str();
+        getBackupWifi(ssid, pass);
       } else {
         getPrimaryWifi(ssid, pass);
       }
       logCaptureLn(String("WiFi 持续掉线，切换到: " + String(ssid)));
+      // 完全停再重启 STA，避免状态机卡在 connecting/leaving 导致新配置进不去
+      WiFi.mode(WIFI_OFF);
+      delay(500);
+      WiFi.mode(WIFI_STA);
       WiFi.begin(ssid, pass);
       wifiDownSince = now;  // 重置计时，再给 60 秒
+    }
+
+    // 长时间两张网都连不上（在位切换失败/状态机卡死）：重启兜底。开机连接路径
+    // 是唯一被实战验证可靠的切网方式；短信已走存储路由，重启不丢。
+    // 门限：掉线 ≥5 分钟且开机已运行 ≥15 分钟——后者防止两张网全挂时无限重启
+    // （开机阶段自身的 3 次重试失败会进离线模式，不会走到这里）
+    if (now - wifiDownSince >= 300000UL && millis() >= 900000UL) {
+      logCaptureLn(String("⚠️ WiFi 掉线超 5 分钟未恢复，重启设备兜底..."));
+      delay(500);
+      ESP.restart();
     }
   } else {
     wifiDownSince = 0;
@@ -74,7 +106,6 @@ void healthTask() {
     lastHeapLog = now;
     logCaptureF("[SYS] heap=%uKB maxAlloc=%uKB\n",
                 (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024));
-    if (ESP.getFreeHeap() < dayStats.heapMin) dayStats.heapMin = ESP.getFreeHeap();
     if (ESP.getFreeHeap() < 60000) {
       logCaptureLn(String("⚠️ 堆内存偏低（<60KB），如持续出现请重启设备"));
     }
@@ -97,8 +128,6 @@ void healthTask() {
       int dbm;
       if (modemParseCsq(sendATCommand("AT+CSQ", 2000), dbm)) {
         modemSignalCache = String(dbm) + " dBm";
-        if (dayStats.sigMin == 0 || dbm < dayStats.sigMin) dayStats.sigMin = dbm;
-        if (dbm > dayStats.sigMax) dayStats.sigMax = dbm;
       } else {
         modemSignalCache = "未知";
       }
@@ -126,8 +155,19 @@ void healthTask() {
 
   if (!modemReady && now - lastReinit >= REINIT_MS) {
     lastReinit = now;
-    logCaptureLn(String("[后台] 重新初始化模组..."));
-    modemInit();
+    // 纯 AT 重试救不回「失聪」的模组（供电/接触问题）：连续 3 次失败升级为
+    // EN 断电重启，这是固件手里唯一的硬恢复手段
+    static uint8_t reinitFails = 0;
+    if (reinitFails >= 2) {
+      reinitFails = 0;
+      logCaptureLn(String("[后台] 连续初始化失败，EN 断电重启模组..."));
+      resetModule();  // EN 断电 + 重新初始化
+    } else {
+      reinitFails++;
+      logCaptureLn(String("[后台] 重新初始化模组（第 " + String(reinitFails) + "/2 次，再失败将断电重启）..."));
+      modemInit();
+    }
+    if (modemReady) reinitFails = 0;
   }
 
   // ---- NTP 后台补同步 ----
@@ -143,50 +183,4 @@ void healthTask() {
     logCaptureLn(String("NTP时间同步成功（后台补同步）"));
   }
 
-  // ---- 每日健康报告（本地时区 8 点，每天一次） ----
-  static int lastReportDay = -1;
-  if (config.reportEnabled && timeSynced) {
-    time_t nowT = time(nullptr);
-    struct tm lt;
-    localtime_r(&nowT, &lt);
-    if (lt.tm_hour == 8 && lt.tm_yday != lastReportDay) {
-      lastReportDay = lt.tm_yday;
-      logCaptureLn(String("触发每日健康报告"));
-      healthSendReport();
-    }
-  }
-}
-
-void healthSendReport() {
-  char dateBuf[24];
-  time_t nowT = time(nullptr);
-  if (nowT < 100000) {
-    snprintf(dateBuf, sizeof(dateBuf), "(time unsynced)");
-  } else {
-    struct tm lt;
-    localtime_r(&nowT, &lt);
-    strftime(dateBuf, sizeof(dateBuf), "%Y-%m-%d", &lt);
-  }
-
-  String NL2 = "\n";
-  String text = "短信转发器每日报告 ";
-  text += dateBuf;
-  text += NL2 + "----------" + NL2;
-  text += "收到短信: " + String(dayStats.smsIn) + " 条";
-  if (dayStats.blocked > 0) text += "（拦截 " + String(dayStats.blocked) + " 条）";
-  text += NL2 + "转发成功: " + String(dayStats.fwdOk) + " 条";
-  if (dayStats.fwdFail > 0) text += NL2 + "转发失败: " + String(dayStats.fwdFail) + " 条";
-  if (dayStats.sigMin != 0) {
-    text += NL2 + "信号范围: " + String(dayStats.sigMin) + " ~ " + String(dayStats.sigMax) + " dBm";
-  }
-  if (dayStats.heapMin != 0xFFFFFFFF) {
-    text += NL2 + "堆内存最低: " + String(dayStats.heapMin / 1024) + " KB";
-  }
-  text += NL2 + "运行时长: " + String(millis() / 3600000) + " 小时";
-
-  pushBroadcastText("短信转发器每日健康报告", text.c_str());
-
-  dayStats.smsIn = dayStats.fwdOk = dayStats.fwdFail = dayStats.blocked = 0;
-  dayStats.sigMin = dayStats.sigMax = 0;
-  dayStats.heapMin = 0xFFFFFFFF;
 }

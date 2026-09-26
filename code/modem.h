@@ -4,7 +4,8 @@
 #include "globals.h"
 
 String sendATCommand(const char* cmd, unsigned long timeout);
-void modemPowerCycle();
+// lowMs=EN 拉低时长：开机上电默认 1200ms；故障恢复传 5000ms 深断电
+void modemPowerCycle(unsigned long lowMs = 1200);
 void resetModule();
 bool modemInit();
 bool sendATandWaitOK(const char* cmd, unsigned long timeout);

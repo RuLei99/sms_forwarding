@@ -11,8 +11,12 @@ String configToJson(bool maskSecrets);
 String configFromJson(const String& json);
 bool isPushChannelValid(const PushChannel& ch);
 bool isConfigValid();
+// SIM PIN：空表示不自动解锁；非空时必须为 4-8 位纯数字
+bool isSimPinValid(const String& pin);
 String getDeviceUrl();
 // 主 WiFi 生效凭据：网页配置(NVS)优先，留空回退 wifi_config.h 编译宏
 void getPrimaryWifi(const char*& ssid, const char*& pass);
+// 备用 WiFi 生效凭据：网页配置(NVS)优先，回退编译宏；两者皆空时返回空串（无备网）
+void getBackupWifi(const char*& ssid, const char*& pass);
 
 #endif

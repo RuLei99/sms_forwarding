@@ -15,5 +15,8 @@ bool isAdmin(const char* sender);
 void processAdminCommand(const char* sender, const char* text);
 void processSmsContent(const char* sender, const char* text, const char* timestamp);
 void checkSerial1URC();
+// 从 AT 响应文本中提取 +CMTI，及 +CMT 后紧随的 PDU 入队
+// （AT 忙期间到达的短信不丢失）
+void smsNoteCmtiFromResponse(const String& resp);
 
 #endif

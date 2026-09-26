@@ -266,7 +266,6 @@ const char* htmlPage = R"rawliteral(
             <tr><td>模组状态</td><td id="cfgModem">%MODEM_CHECK%</td></tr>
             <tr><td>邮件通知</td><td id="cfgEmail">%SMTP_CHECK%</td></tr>
             <tr><td>推送通道</td><td id="cfgPush">%PUSH_COUNT% 个已启用</td></tr>
-            <tr><td>数据模式</td><td id="cfgData">%DATA_MODE%</td></tr>
             <tr><td>管理员号码</td><td>%ADMIN_PHONE%</td></tr>
           </table>
         </div>
@@ -375,7 +374,7 @@ const char* htmlPage = R"rawliteral(
         <div class="card-body">
           <div class="form-group">
             <input class="form-input" type="text" name="adminPhone" value="%ADMIN_PHONE%" placeholder="13800138000">
-            <p class="form-hint">此号码可通过短信发送远程指令（SMS:号码:内容 发短信、RESET 重启、REPORT 立即发健康报告）</p>
+            <p class="form-hint">此号码可通过短信发送远程指令（SMS:号码:内容 发短信、RESET 重启）</p>
           </div>
         </div>
       </div>
@@ -405,22 +404,6 @@ const char* htmlPage = R"rawliteral(
           <p class="form-hint">先经过号码黑名单，再经过关键词过滤；管理员命令不受过滤影响</p>
         </div>
       </div>
-      <div class="card">
-        <div class="card-header">时区与每日报告</div>
-        <div class="card-body">
-          <div class="form-row">
-            <div class="form-group"><label class="form-label">时区（小时，-12 ~ 14）</label>
-              <input class="form-input" type="number" name="tzHours" value="%TZ_HOURS%" min="-12" max="14" placeholder="8">
-            </div>
-            <div class="form-group"><label class="form-label">每日健康报告</label>
-              <label style="display:inline-flex;align-items:center;gap:8px;padding:8px 0;cursor:pointer;">
-                <input type="checkbox" name="reportEnabled"%REPORT_CHECKED%> 每天 8 点发送
-              </label>
-            </div>
-          </div>
-          <p class="form-hint">报告经邮件 + 所有有效推送通道发送，内容为昨日收信/转发统计与设备状态</p>
-        </div>
-      </div>
       <button type="submit" class="btn btn-primary btn-block btn-save">保存配置</button>
       </form>
     </div>
@@ -448,7 +431,7 @@ const char* htmlPage = R"rawliteral(
         <div class="card-header">Ping</div>
         <div class="card-body">
           <button class="btn btn-secondary" id="pingBtn" onclick="confirmPing()">Ping 8.8.8.8</button>
-          <p class="form-hint">通过模组执行 Ping，会临时开启数据连接；"仅收短信模式"开启时此功能不可用</p>
+          <p class="form-hint">通过模组执行 Ping，会临时开启数据连接</p>
           <div class="result-box" id="pingResult"></div>
         </div>
       </div>
@@ -483,16 +466,17 @@ const char* htmlPage = R"rawliteral(
       <h1 class="page-title">模组控制</h1>
       <p class="page-subtitle">模组重启与飞行模式控制（信号/运营商/IMEI 见「系统概览」）</p>
       <div class="card">
-        <div class="card-header">流量安全</div>
+        <div class="card-header">SIM 卡 PIN</div>
         <div class="card-body">
-          <div class="toggle-row">
-            <div class="toggle-text">
-              <div class="toggle-title">仅收短信模式</div>
-              <p class="form-hint">开启后锁定模组数据连接（开机及注册网络后自动去激活数据承载），收发短信不受影响。短信转发走的家中 WiFi，不消耗 SIM 流量；开启期间"网络测试"中的 Ping 将被禁用。适合境外漫游卡，避免数据漫游扣费。</p>
+          <form action="/save" method="POST">
+            <div class="form-row">
+              <div class="form-group"><label class="form-label">PIN 码（4-8 位）</label>
+                <input class="form-input" type="password" name="simPin" value="%SIM_PIN%" placeholder="留空 = 不自动解锁">
+              </div>
             </div>
-            <input type="checkbox" id="dataLock" %SMS_ONLY_CHECKED% onchange="toggleDataLock(this)">
-          </div>
-          <div class="result-box" id="dataLockResult"></div>
+            <p class="form-hint">默认留空；设备会通过 AT+CPIN? 自动判断是否需要 PIN。只有返回 SIM PIN 且这里已填写时才尝试一次，<b>不会自动猜 0000</b>（连续错 3 次会被要求 PUK）。更省心的做法：先在手机里关闭 SIM 卡锁再插卡。</p>
+            <button type="submit" class="btn btn-primary btn-sm">保存 PIN</button>
+          </form>
         </div>
       </div>
       <div class="card">
@@ -658,7 +642,6 @@ const char* htmlPage = R"rawliteral(
       set('cfgModem',d.modem?'已就绪':'未就绪');
       set('cfgEmail',d.email?'已配置':'未配置');
       set('cfgPush',d.push+' 个已启用');
-      set('cfgData',d.smsOnly?'仅收短信（数据已锁定）':'标准（数据未锁定）');
       var b=document.getElementById('stBanner'),t=document.getElementById('stText');
       if(b&&t){
         if(!d.modem){b.className='status-banner err';t.textContent='模组未就绪 — 短信暂停，后台自动重试中';}
@@ -877,29 +860,6 @@ const char* htmlPage = R"rawliteral(
         if(d.success){r.className='result-box result-success';r.innerHTML=d.message;}
         else{r.className='result-box result-error';r.innerHTML='切换失败: '+d.message;}
       }).catch(function(e){b.disabled=false;r.className='result-box result-error';r.textContent='请求失败: '+e;});
-    }
-
-    function toggleDataLock(cb){
-      var r=document.getElementById('dataLockResult');
-      var want=cb.checked?'on':'off';
-      cb.disabled=true;
-      r.className='result-box result-loading';
-      r.textContent=want==='on'?'正在锁定数据连接...':'正在解锁数据连接...';
-      fetch('/datalock?lock='+want).then(function(rr){return rr.json()}).then(function(d){
-        cb.disabled=false;
-        if(d.success){
-          cb.checked=d.smsOnly;
-          r.className='result-box result-success';r.textContent=d.message;
-          var cfg=document.getElementById('cfgData');
-          if(cfg) cfg.textContent=d.smsOnly?'仅收短信（数据已锁定）':'标准（数据未锁定）';
-        }else{
-          cb.checked=!cb.checked;
-          r.className='result-box result-error';r.textContent=d.message||'操作失败';
-        }
-      }).catch(function(e){
-        cb.disabled=false;cb.checked=!cb.checked;
-        r.className='result-box result-error';r.textContent='请求失败: '+e;
-      });
     }
 
     function modemAction(action){

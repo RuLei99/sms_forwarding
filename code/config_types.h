@@ -46,15 +46,13 @@ struct Config {
   String webUser;      // Web管理账号
   String webPass;      // Web管理密码
   String numberBlackList;  // 号码黑名单（换行符分隔）
-  bool smsOnly;        // 仅收短信模式：锁定模组数据连接（去激活PDP），Ping被禁用，防止漫游流量扣费
   bool filterWhitelist;    // 关键词过滤模式：true=白名单（仅转发命中），false=黑名单（拦截命中）
   String filterKeywords;   // 过滤关键词，每行一个；留空=不过滤
-  int tzHours;             // 时区（小时，-12~14）：每日报告触发时间用，默认 8（北京时间）
-  bool reportEnabled;      // 每日 8 点健康报告（邮件 + 所有有效推送通道），默认开
   String wifi1Ssid;        // 主 WiFi SSID（空=使用固件内置 wifi_config.h 宏）
   String wifi1Pass;        // 主 WiFi 密码
   String wifi2Ssid;        // 备用 WiFi SSID（空=不启用双 WiFi 热备）
   String wifi2Pass;        // 备用 WiFi 密码
+  String simPin;           // SIM 卡 PIN 码（空=不自动解锁；仅开机尝试一次，错误不重试防锁卡）
 };
 
 // 默认Web管理账号密码

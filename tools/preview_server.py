@@ -20,7 +20,6 @@ SAMPLE_VARS = {
     "MODEM_CHECK": "已就绪",
     "SMTP_CHECK": "已配置",
     "PUSH_COUNT": "2",
-    "DATA_MODE": "仅收短信（数据已锁定）",
     "ADMIN_PHONE": "13800138000",
     "WEB_USER": "admin",
     "WEB_PASS": "admin123",
@@ -33,9 +32,8 @@ SAMPLE_VARS = {
     "FILTER_KEYWORDS": "退订\n回T",
     "FLT_WL_SEL": "",
     "FLT_BL_SEL": " selected",
-    "SMS_ONLY_CHECKED": " checked",
     "TZ_HOURS": "8",
-    "REPORT_CHECKED": " checked",
+    "SIM_PIN": "0000",
     "WIFI1_SSID": "Home-5G",
     "WIFI1_PASS": "main-pass-1234",
     "WIFI2_SSID": "Home-2.4G-Backup",
@@ -108,7 +106,6 @@ STATUS = {
     "iccid": "89860123456789012345",
     "model": "ML307R",
     "fw": "ML307RAR01A07",
-    "smsOnly": True,
     "email": True,
     "push": 3,
     "channels": [
@@ -131,7 +128,6 @@ SMSLOG = {
 LOGS = [
     "[12:01:03] WiFi 已连接，IP: 192.168.1.233",
     "[12:01:05] 模组初始化完成，信号 -71 dBm",
-    "[12:01:06] 已禁用 4G 数据连接（仅收短信模式）",
     "[10:21:05] 收到短信来自 10086，已转发（邮件+推送）",
 ]
 
@@ -178,7 +174,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "application/json", json.dumps({
                 "smtpServer": "smtp.qq.com", "smtpPort": 465, "smtpUser": "me@qq.com",
                 "smtpSendTo": "receiver@example.com", "adminPhone": "13800138000",
-                "webUser": "admin", "tzHours": 8, "reportEnabled": True,
+                "webUser": "admin",
                 "wifi2Ssid": "Home-2.4G-Backup",
                 "channels": [{"enabled": True, "type": 2, "name": "Bark 推送", "url": "https://api.day.app/x"}]
             }, ensure_ascii=False))

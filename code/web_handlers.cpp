@@ -104,6 +104,24 @@ static void releaseModemPort() { modemPortBusy = false; }
 // （52KB 页面峰值会占到 100KB+ 堆，挤压 WiFi/SSL/SMTP）。
 struct PageVar { const char* key; String value; };
 
+// 配置内容会进入 input value / textarea /普通文本。统一转义，避免引号破坏页面，
+// 也避免通过配置导入把 HTML/脚本注入管理页。
+static String htmlEscape(const String& input) {
+  String out;
+  out.reserve(input.length() + 16);
+  for (size_t i = 0; i < input.length(); i++) {
+    switch (input[i]) {
+      case '&': out += "&amp;"; break;
+      case '<': out += "&lt;"; break;
+      case '>': out += "&gt;"; break;
+      case '"': out += "&quot;"; break;
+      case '\'': out += "&#39;"; break;
+      default: out += input[i]; break;
+    }
+  }
+  return out;
+}
+
 static void streamTemplatedPage(const char* page, const PageVar* vars, int nVars) {
   char chunk[1024];
   size_t len = 0;
@@ -114,8 +132,9 @@ static void streamTemplatedPage(const char* page, const PageVar* vars, int nVars
     }
   };
 
+  // Content-Type 必须带 charset=utf-8：部分内嵌浏览器不解析 <meta charset>，会按错误编码显示中文
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-  server.send(200, "text/html", "");
+  server.send(200, "text/html; charset=utf-8", "");
 
   const char* p = page;
   while (*p) {
@@ -131,7 +150,9 @@ static void streamTemplatedPage(const char* page, const PageVar* vars, int nVars
         for (int i = 0; i < nVars; i++) {
           if (strcmp(vars[i].key, key) == 0) {
             flush();
-            server.sendContent(vars[i].value);
+            // 空值绝不能 sendContent：chunked 模式下零长度块 = 响应终止符，
+            // 会把页面拦腰截断（首次配置时空 ADMIN_PHONE/SMTP_* 必现）
+            if (vars[i].value.length() > 0) server.sendContent(vars[i].value);
             p = e + 1;
             matched = true;
             break;
@@ -187,7 +208,7 @@ void handleRoot() {
     // 通道名称
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>通道名称</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "name\" value=\"" + config.pushChannels[i].name + "\" placeholder=\"自定义名称\">";
+    channelsHtml += "<input type=\"text\" name=\"push" + idx + "name\" value=\"" + htmlEscape(config.pushChannels[i].name) + "\" placeholder=\"自定义名称\">";
     channelsHtml += "</div>";
 
     // 推送类型
@@ -206,18 +227,18 @@ void handleRoot() {
     // URL
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>推送URL/Webhook</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "url\" id=\"url" + idx + "\" value=\"" + config.pushChannels[i].url + "\" placeholder=\"http://your-server.com/api 或 webhook地址\">";
+    channelsHtml += "<input type=\"text\" name=\"push" + idx + "url\" id=\"url" + idx + "\" value=\"" + htmlEscape(config.pushChannels[i].url) + "\" placeholder=\"http://your-server.com/api 或 webhook地址\">";
     channelsHtml += "</div>";
 
     // 额外参数区域（钉钉/PushPlus/Server酱等需要）
     channelsHtml += "<div id=\"extra" + idx + "\" style=\"display:none;\">";
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label id=\"key1label" + idx + "\">参数1</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key1\" id=\"key1" + idx + "\" value=\"" + config.pushChannels[i].key1 + "\">";
+    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key1\" id=\"key1" + idx + "\" value=\"" + htmlEscape(config.pushChannels[i].key1) + "\">";
     channelsHtml += "</div>";
     channelsHtml += "<div class=\"form-group\" id=\"key2group" + idx + "\">";
     channelsHtml += "<label id=\"key2label" + idx + "\">参数2</label>";
-    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key2\" id=\"key2" + idx + "\" value=\"" + config.pushChannels[i].key2 + "\">";
+    channelsHtml += "<input type=\"text\" name=\"push" + idx + "key2\" id=\"key2" + idx + "\" value=\"" + htmlEscape(config.pushChannels[i].key2) + "\">";
     channelsHtml += "</div>";
     channelsHtml += "</div>";
 
@@ -225,7 +246,7 @@ void handleRoot() {
     channelsHtml += "<div id=\"custom" + idx + "\" style=\"display:none;\">";
     channelsHtml += "<div class=\"form-group\">";
     channelsHtml += "<label>请求体模板（使用 {sender} {message} {timestamp} 占位符）</label>";
-    channelsHtml += "<textarea name=\"push" + idx + "body\" rows=\"4\" style=\"width:100%;font-family:monospace;\">" + config.pushChannels[i].customBody + "</textarea>";
+    channelsHtml += "<textarea name=\"push" + idx + "body\" rows=\"4\" style=\"width:100%;font-family:monospace;\">" + htmlEscape(config.pushChannels[i].customBody) + "</textarea>";
     channelsHtml += "</div>";
     channelsHtml += "</div>";
 
@@ -237,28 +258,25 @@ void handleRoot() {
     {"WIFI_SSID", String(WiFi.SSID())},
     {"FREE_HEAP", String(ESP.getFreeHeap() / 1024) + " KB"},
     {"UPTIME", String(uptimeBuf)},
-    {"WEB_USER", config.webUser},
-    {"WEB_PASS", config.webPass},
-    {"SMTP_SERVER", config.smtpServer},
+    {"WEB_USER", htmlEscape(config.webUser)},
+    {"WEB_PASS", htmlEscape(config.webPass)},
+    {"SMTP_SERVER", htmlEscape(config.smtpServer)},
     {"SMTP_PORT", String(config.smtpPort)},
-    {"SMTP_USER", config.smtpUser},
-    {"SMTP_PASS", config.smtpPass},
-    {"SMTP_SEND_TO", config.smtpSendTo},
-    {"ADMIN_PHONE", config.adminPhone},
-    {"NUMBER_BLACK_LIST", config.numberBlackList},
-    {"FILTER_KEYWORDS", config.filterKeywords},
+    {"SMTP_USER", htmlEscape(config.smtpUser)},
+    {"SMTP_PASS", htmlEscape(config.smtpPass)},
+    {"SMTP_SEND_TO", htmlEscape(config.smtpSendTo)},
+    {"ADMIN_PHONE", htmlEscape(config.adminPhone)},
+    {"NUMBER_BLACK_LIST", htmlEscape(config.numberBlackList)},
+    {"FILTER_KEYWORDS", htmlEscape(config.filterKeywords)},
     {"FLT_WL_SEL", config.filterWhitelist ? " selected" : ""},
     {"FLT_BL_SEL", config.filterWhitelist ? "" : " selected"},
-    {"TZ_HOURS", String(config.tzHours)},
-    {"REPORT_CHECKED", config.reportEnabled ? " checked" : ""},
-    {"WIFI1_SSID", config.wifi1Ssid},
-    {"WIFI1_PASS", config.wifi1Pass},
-    {"WIFI2_SSID", config.wifi2Ssid},
-    {"WIFI2_PASS", config.wifi2Pass},
+    {"WIFI1_SSID", htmlEscape(config.wifi1Ssid)},
+    {"WIFI1_PASS", htmlEscape(config.wifi1Pass)},
+    {"WIFI2_SSID", htmlEscape(config.wifi2Ssid)},
+    {"WIFI2_PASS", htmlEscape(config.wifi2Pass)},
+    {"SIM_PIN", htmlEscape(config.simPin)},
     {"SMTP_CHECK", emailOk ? "已配置" : "未配置"},
     {"MODEM_CHECK", modemReady ? "已就绪" : "未就绪"},
-    {"DATA_MODE", config.smsOnly ? "仅收短信（数据已锁定）" : "标准（数据未锁定）"},
-    {"SMS_ONLY_CHECKED", config.smsOnly ? " checked" : ""},
     {"PUSH_COUNT", String(pushCount)},
     {"PUSH_CHANNELS", channelsHtml},
   };
@@ -449,13 +467,6 @@ void handleSendSms() {
 void handlePing() {
   if (!checkAuth()) return;
 
-  // 仅收短信模式下拒绝 Ping：Ping 需要临时激活数据承载（AT+CGACT=1,1），
-  // 漫游卡可能因此产生流量扣费
-  if (config.smsOnly) {
-    logCaptureLn(String("仅收短信模式下拒绝Ping请求（数据连接已锁定）"));
-    server.send(200, "application/json", "{\"success\":false,\"message\":\"仅收短信模式已锁定数据连接，Ping 会临时开启数据、可能产生漫游流量。如确需使用，请先在“模组控制”页关闭“仅收短信模式”。\"}");
-    return;
-  }
   uint32_t id = jobsSubmit(MODEM_JOB_PING);
   if (id == 0) {
     server.send(200, "application/json", "{\"success\":false,\"message\":\"任务队列忙，请稍后重试\"}");
@@ -515,18 +526,17 @@ void handleSave() {
     config.filterWhitelist = (server.arg("filterMode") == "whitelist");
   }
 
-  // 时区与每日报告（管理员表单）
-  if (server.hasArg("tzHours")) {
-    int tz = server.arg("tzHours").toInt();
-    if (tz < -12 || tz > 14) tz = 8;
-    config.tzHours = tz;
-    char tzBuf[16];
-    snprintf(tzBuf, sizeof(tzBuf), "UTC%d", -config.tzHours);  // POSIX TZ 符号与实际相反
-    setenv("TZ", tzBuf, 1);
-    tzset();
-  }
-  if (server.hasArg("reportEnabled")) {
-    config.reportEnabled = (server.arg("reportEnabled") == "on");
+  // SIM PIN（模组控制表单）：留空 = 清除（不自动解锁）
+  if (server.hasArg("simPin")) {
+    String pin = server.arg("simPin");
+    pin.trim();
+    if (isSimPinValid(pin)) {
+      config.simPin = pin;
+      // 用户显式重新保存 PIN，解除“本次开机已解锁失败”锁存，允许再试一次
+      simPinUnlockFailed = false;
+    } else {
+      logCaptureLn(String("⚠️ SIM PIN 非法（仅允许4-8位数字），忽略本次修改"));
+    }
   }
 
   // 主 WiFi（网络测试表单）：留空 = 恢复使用固件内置 wifi_config.h
@@ -718,6 +728,7 @@ void handleWifi() {
     WiFi.disconnect(true);
     delay(500);
     WiFi.setSleep(false);
+    WiFi.setTxPower(WIFI_POWER_15dBm);
     WiFi.setAutoReconnect(true);
     WiFi.setScanMethod(WIFI_FAST_SCAN);
     const char* rs; const char* rp;
@@ -726,7 +737,7 @@ void handleWifi() {
     logCaptureLn(String("正在重新连接WiFi: " + String(rs)));
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-      esp_task_wdt_reset();
+      wdtFeed();
       delay(50);
       server.handleClient();
     }
@@ -758,33 +769,6 @@ void handleSystem() {
   }
 }
 
-// 仅收短信模式开关（锁定模组数据连接，防止漫游流量扣费）
-// GET /datalock?lock=on|off 设置，无参数时查询当前状态
-void handleDataLock() {
-  if (!checkAuth()) return;
-
-  String lock = server.arg("lock");
-  if (lock == "on" || lock == "off") {
-    config.smsOnly = (lock == "on");
-    saveConfig();
-    logCaptureLn(String(config.smsOnly ? "仅收短信模式已开启：锁定数据连接" : "仅收短信模式已关闭：允许Ping使用数据"));
-    if (config.smsOnly && modemReady) {
-      // 立即去激活数据承载，不用等下次重启
-      if (!acquireModemPort("/datalock")) return;
-      String resp = sendATCommand("AT+CGACT=0,1", 5000);
-      logCaptureLn(String("CGACT去激活响应: " + resp));
-      releaseModemPort();
-    }
-  }
-
-  String json = "{";
-  json += "\"success\":true,";
-  json += "\"smsOnly\":" + String(config.smsOnly ? "true" : "false") + ",";
-  json += "\"message\":\"" + String(config.smsOnly ? "仅收短信模式已开启，数据连接已锁定" : "仅收短信模式已关闭，Ping 可用") + "\"";
-  json += "}";
-  server.send(200, "application/json", json);
-}
-
 // 概览页轻量状态（自动刷新用，只读缓存，不碰模组串口）
 void handleStatus() {
   if (!checkAuth()) return;
@@ -811,7 +795,6 @@ void handleStatus() {
   json += "\"iccid\":\"" + jsonEscape(modemIccidCache) + "\",";
   json += "\"model\":\"" + jsonEscape(modemModelCache) + "\",";
   json += "\"fw\":\"" + jsonEscape(modemFwCache) + "\",";
-  json += "\"smsOnly\":" + String(config.smsOnly ? "true" : "false") + ",";
   json += "\"email\":" + String(emailOk ? "true" : "false") + ",";
   json += "\"push\":" + String(pushCount) + ",";
   json += "\"channels\":" + pushChannelStatsJson();
@@ -871,12 +854,18 @@ void handleTestPush() {
 
 // CSV 字段转义：含逗号/引号/换行的字段包引号，内部引号翻倍
 static String csvField(const String& s) {
-  bool needQuote = s.indexOf(',') >= 0 || s.indexOf('"') >= 0 || s.indexOf('\n') >= 0;
-  if (!needQuote) return s;
+  String safe = s;
+  // 短信内容属于不可信输入；Excel/表格软件会把 = + - @ 开头的字段当公式执行。
+  // 前置单引号既阻止公式注入，也能保留 +86 手机号的文本格式。
+  if (safe.length() > 0 && (safe[0] == '=' || safe[0] == '+' || safe[0] == '-' || safe[0] == '@')) {
+    safe = "'" + safe;
+  }
+  bool needQuote = safe.indexOf(',') >= 0 || safe.indexOf('"') >= 0 || safe.indexOf('\n') >= 0;
+  if (!needQuote) return safe;
   String r = "\"";
-  for (unsigned int i = 0; i < s.length(); i++) {
-    if (s.charAt(i) == '"') r += "\"\"";
-    else r += s.charAt(i);
+  for (unsigned int i = 0; i < safe.length(); i++) {
+    if (safe.charAt(i) == '"') r += "\"\"";
+    else r += safe.charAt(i);
   }
   r += "\"";
   return r;

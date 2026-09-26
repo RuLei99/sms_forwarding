@@ -59,9 +59,9 @@ def main():
             ("无未替换占位符", not re.search(r"%[A-Z][A-Z_]+%", page)),
             ("登录账号填充", 'name="webUser" value="admin"' in page),
             ("通道健康卡片", "chHealthTable" in page),
-            ("时区与每日报告表单", 'name="tzHours"' in page and "reportEnabled" in page),
             ("主/备 WiFi 表单", 'name="wifi1Ssid"' in page and 'name="wifi2Ssid"' in page),
             ("手机端更多面板", "navSheet" in page and "nav-more" in page),
+            ("SIM PIN 表单", 'name="simPin"' in page),
             ("配置备份卡", "cfgImportFile" in page),
             ("CSV 导出按钮", "/recordsexport" in page),
             ("ntfy/MQTT 前端提示", "type == 11" in page and "type == 12" in page),
@@ -74,7 +74,7 @@ def main():
         d = json.loads(body)
         need = ["ip", "ssid", "heap", "uptime", "modem", "signal",
                 "operator", "imei", "iccid", "model", "fw",
-                "smsOnly", "email", "push", "channels"]
+                "email", "push", "channels"]
         miss = [k for k in need if k not in d]
         (ok if not miss else fail)("15 个字段齐全" if not miss else f"缺字段: {miss}")
         chans = d.get("channels", [])

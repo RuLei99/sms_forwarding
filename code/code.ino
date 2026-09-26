@@ -13,6 +13,27 @@
 
 // 看门狗：loop 卡死（模组 AT 死等/SSL 挂起等）超过 30 秒自动复位，
 // 复位原因会记录在启动日志里（esp_reset_reason）
+// 最近一次 STA 断开原因（WiFi 连不上时用于区分密码错/找不到AP/被拒，3.3 核心无 getter 只能事件回调取）
+static volatile int8_t s_lastWifiReason = -1;
+static const char* wifiReasonName() {
+  if (s_lastWifiReason < 0) return "无断开事件";
+  return WiFi.disconnectReasonName((wifi_err_reason_t)s_lastWifiReason);
+}
+
+// 开机 WiFi 状态（失败计数 + 直连备网标记）。必须用 RTC_NOINIT：C3 的 .rtc.data
+// 段每次复位都会被 ROM 重新初始化存不住值；noinit 不初始化，用魔数区分掉电后的随机内容
+static RTC_NOINIT_ATTR uint32_t s_wifiBootState;
+#define WBS_MAGIC 0xA57B0002u
+static uint32_t wbsFails() {
+  return ((s_wifiBootState & WBS_MAGIC) == WBS_MAGIC) ? (s_wifiBootState & 0xFFFFu) : 0;
+}
+static bool wbsTryBackup() {
+  return ((s_wifiBootState & WBS_MAGIC) == WBS_MAGIC) && (s_wifiBootState & 0x10000u);
+}
+static void wbsSet(uint32_t fails, bool tryBackup) {
+  s_wifiBootState = WBS_MAGIC | (fails & 0xFFFFu) | (tryBackup ? 0x10000u : 0u);
+}
+
 static void watchdogInit() {
   esp_task_wdt_config_t cfg = {
     .timeout_ms = 30000,   // 覆盖大多数合法长操作；长等待循环内部会周期喂狗
@@ -21,6 +42,7 @@ static void watchdogInit() {
   };
   esp_task_wdt_reconfigure(&cfg);  // 核心已初始化 TWDT，重配参数即可
   esp_task_wdt_add(NULL);          // 订阅当前任务（loopTask）
+  wdtArmed = true;
   logCaptureLn(String("看门狗已启用（30 秒）"));
 }
 
@@ -56,19 +78,19 @@ void setup() {
   Serial1.setRxBufferSize(2048);
   Serial1.begin(115200, SERIAL_8N1, RXD, TXD);
   while (Serial1.available()) Serial1.read();
+#ifdef WIFI_DIAG_MODEM_OFF
+  // 【临时诊断】模组保持断电：排除 4G 模组供电/射频干扰对 WiFi 的影响
+  pinMode(MODEM_EN_PIN, OUTPUT);
+  digitalWrite(MODEM_EN_PIN, LOW);
+  delay(2000);
+  Serial.println("[诊断] 模组保持断电（EN 拉低），仅测试 WiFi");
+#else
   modemPowerCycle();
+#endif
   while (Serial1.available()) Serial1.read();
   initConcatBuffer();
   loadConfig();
   configValid = isConfigValid();
-
-  // 时区（每日报告触发时间用；POSIX TZ 符号与实际相反：UTC-8 = UTC+8）
-  {
-    char tzBuf[16];
-    snprintf(tzBuf, sizeof(tzBuf), "UTC%d", -config.tzHours);
-    setenv("TZ", tzBuf, 1);
-    tzset();
-  }
 
   // 短信记录持久化（LittleFS，重启不丢）
   if (LittleFS.begin(true)) {
@@ -80,6 +102,11 @@ void setup() {
 
   // ---- WiFi 连接优化 ----
   WiFi.mode(WIFI_STA);
+  // RSSI 余量充足时降低射频峰值功耗，缓解与 4G 模组共用边缘供电造成的 AUTH_EXPIRE。
+  WiFi.setTxPower(WIFI_POWER_15dBm);
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    s_lastWifiReason = (int8_t)info.wifi_sta_disconnected.reason;
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   WiFi.setSleep(false);                    // 关闭 Modem Sleep，提高连接响应速度
   WiFi.setAutoReconnect(true);             // 断线后自动重连
   // 使用快速扫描而非全信道扫描（全信道扫描在空信道上等待超时极慢）
@@ -88,29 +115,43 @@ void setup() {
   WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   const char* primSsid; const char* primPass;
   getPrimaryWifi(primSsid, primPass);
-  WiFi.begin(primSsid, primPass);
-  logCaptureLn(String("连接wifi: ") + String(primSsid) +
-               (config.wifi1Ssid.length() > 0 ? "（网页配置）" : "（固件内置）"));
+  const char* bakSsid = "";
+  const char* bakPass = "";
+  getBackupWifi(bakSsid, bakPass);
+  // 主备切换采用「标记 + 重启」而非运行中换 SSID：后者会被核心库 autoReconnect 的
+  // disconnect/connect 循环卡在 connecting/leaving 状态，新配置进不去；开机时驱动是
+  // 干净的 IDLE 状态，直连哪个都可靠。
+  bool bootTryBackup = wbsTryBackup();  // 上个开机周期主网失败，本次直连备网
+  if (bootTryBackup && strlen(bakSsid) > 0) {
+    logCaptureLn(String("优先连接备用 WiFi（上次记录）: ") + String(bakSsid));
+    WiFi.begin(bakSsid, bakPass);
+  } else {
+    WiFi.begin(primSsid, primPass);
+    logCaptureLn(String("连接wifi: ") + String(primSsid) +
+                 (config.wifi1Ssid.length() > 0 ? "（网页配置）" : "（固件内置）"));
+  }
 
-  // 带超时的等待连接。主 WiFi 失败后尝试备用（双 WiFi 热备）。
+  // 带超时的等待连接。主 WiFi 失败后重启切换到备用（双 WiFi 热备）。
   // 连续 3 次开机都失败则不再重启（避免无限重启循环），进入离线模式靠 autoReconnect 后台重连
-  static RTC_DATA_ATTR int wifiBootFails = 0;  // RTC 内存：软重启后保留
+  uint32_t wifiBootFails = wbsFails();
   const unsigned long WIFI_TIMEOUT = 20000; // 单个 SSID 20秒超时
   unsigned long wifiStart = millis();
+  int8_t lastReasonLogged = -2;
   while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < WIFI_TIMEOUT) {
-    blink_short(200);
-  }
-  if (WiFi.status() != WL_CONNECTED && config.wifi2Ssid.length() > 0) {
-    logCaptureLn(String("主 WiFi 未连接，尝试备用: " + config.wifi2Ssid));
-    WiFi.begin(config.wifi2Ssid.c_str(), config.wifi2Pass.c_str());
-    wifiStart = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < WIFI_TIMEOUT) {
-      blink_short(200);
+    // 断开原因一变就打日志（autoReconnect 重试会反复发同类事件，去重避免刷屏）。
+    // reason 201=NO_AP_FOUND(热点不在范围) 202/AUTH_FAIL/15(四次握手超时)=密码错误
+    if (s_lastWifiReason != lastReasonLogged) {
+      lastReasonLogged = s_lastWifiReason;
+      logCaptureLn(String("WiFi 事件: status=") + String(WiFi.status()) +
+                   " reason=" + String(wifiReasonName()));
     }
+    blink_short(200);
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    wifiBootFails = 0;
+    // 记住本次先试就成功的网络（sticky）：下次开机直接先试它，省去 20 秒超时
+    // + 一次重启 + 模组断电；另一张网留给运行时 health 切换逻辑兜底
+    wbsSet(0, bootTryBackup);
     logCaptureLn(String("wifi已连接"));
     logCapture(String("IP地址: "));
     logCaptureLn(WiFi.localIP().toString());
@@ -118,7 +159,26 @@ void setup() {
     logCaptureLn(String(WiFi.RSSI()) + " dBm");
   } else if (wifiBootFails < 3) {
     wifiBootFails++;
-    logCaptureLn(String("⚠️ WiFi连接超时（第 ") + String(wifiBootFails) + "/3 次），即将重启重试...");
+    // 失败时扫一遍环境，区分「热点不在设备附近」与「密码/路由器拒绝」
+    logCaptureLn(String("扫描周边 WiFi..."));
+    int scanN = WiFi.scanNetworks();
+    for (int i = 0; i < scanN && i < 8; i++) {
+      logCaptureLn(String("  ") + WiFi.SSID(i) + " (" + String(WiFi.RSSI(i)) + " dBm)");
+    }
+    if (scanN <= 0) logCaptureLn(String("  （扫描不到任何网络）"));
+    WiFi.scanDelete();
+    if (!bootTryBackup && strlen(bakSsid) > 0) {
+      // 主网失败：标记后重启，下个开机周期直连备网（备网也失败则清标记回到主网）
+      wbsSet(wifiBootFails, true);
+      logCaptureLn(String("⚠️ 主 WiFi 连接失败(status=" + String(WiFi.status()) +
+                          ",reason=" + String(wifiReasonName()) + ")，重启切换备用网络..."));
+      delay(500);
+      ESP.restart();
+    }
+    wbsSet(wifiBootFails, false);
+    logCaptureLn(String("⚠️ WiFi连接超时（第 ") + String(wifiBootFails) + "/3 次），" +
+                 "status=" + String(WiFi.status()) + " reason=" + String(wifiReasonName()) +
+                 "，即将重启重试...");
     delay(1000);
     ESP.restart();
   } else {
@@ -137,7 +197,6 @@ void setup() {
   server.on("/modem", handleModem);
   server.on("/wifi", handleWifi);
   server.on("/system", handleSystem);
-  server.on("/datalock", handleDataLock);
   server.on("/status", handleStatus);
   server.on("/smslog", handleSmsLog);
   server.on("/testpush", handleTestPush);
@@ -191,7 +250,7 @@ void setup() {
 }
 
 void loop() {
-  esp_task_wdt_reset();  // 每圈喂狗；长阻塞发生在各模块的等待循环内部，那里也有喂狗点
+  wdtFeed();  // 每圈喂狗；长阻塞发生在各模块的等待循环内部，那里也有喂狗点
   server.handleClient();
   if (!configValid) {
     if (millis() - lastPrintTime >= 1000) {

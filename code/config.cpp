@@ -3,6 +3,15 @@
 #include "push.h"
 #include "wifi_config.h"
 
+bool isSimPinValid(const String& pin) {
+  if (pin.length() == 0) return true;
+  if (pin.length() < 4 || pin.length() > 8) return false;
+  for (size_t i = 0; i < pin.length(); i++) {
+    if (pin[i] < '0' || pin[i] > '9') return false;
+  }
+  return true;
+}
+
 // 保存配置到NVS
 void saveConfig() {
   if (!preferences.begin("sms_config", false)) {
@@ -20,15 +29,13 @@ void saveConfig() {
   putS("webUser", config.webUser);
   putS("webPass", config.webPass);
   putS("numBlkList", config.numberBlackList);
-  if (!preferences.putBool("smsOnly", config.smsOnly)) failCnt++;
   if (!preferences.putBool("fltWL", config.filterWhitelist)) failCnt++;
   putS("fltKw", config.filterKeywords);
-  if (!preferences.putInt("tz", config.tzHours)) failCnt++;
-  if (!preferences.putBool("report", config.reportEnabled)) failCnt++;
   putS("wifi1ssid", config.wifi1Ssid);
   putS("wifi1pass", config.wifi1Pass);
   putS("wifi2ssid", config.wifi2Ssid);
   putS("wifi2pass", config.wifi2Pass);
+  putS("simpin", config.simPin);
 
   // 保存推送通道配置
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
@@ -62,17 +69,17 @@ void loadConfig() {
   config.webUser = preferences.getString("webUser", DEFAULT_WEB_USER);
   config.webPass = preferences.getString("webPass", DEFAULT_WEB_PASS);
   config.numberBlackList = preferences.getString("numBlkList", "");
-  // 默认开启：仅收短信不消耗流量，适合漫游卡；老用户升级后可在“模组控制”页解锁
-  config.smsOnly = preferences.getBool("smsOnly", true);
   config.filterWhitelist = preferences.getBool("fltWL", false);
   config.filterKeywords = preferences.getString("fltKw", "");
-  config.tzHours = preferences.getInt("tz", 8);
-  if (config.tzHours < -12 || config.tzHours > 14) config.tzHours = 8;
-  config.reportEnabled = preferences.getBool("report", true);
   config.wifi1Ssid = preferences.getString("wifi1ssid", "");
   config.wifi1Pass = preferences.getString("wifi1pass", "");
   config.wifi2Ssid = preferences.getString("wifi2ssid", "");
   config.wifi2Pass = preferences.getString("wifi2pass", "");
+  config.simPin = preferences.getString("simpin", "");
+  if (!isSimPinValid(config.simPin)) {
+    logCaptureLn(String("⚠️ NVS 中 SIM PIN 非法，已清除（仅允许4-8位数字）"));
+    config.simPin = "";
+  }
 
   // NVS 脏数据防御：端口/类型超出合法范围时回退默认值，避免后续连接/推送诡异失败
   if (config.smtpPort <= 0 || config.smtpPort > 65535) {
@@ -155,15 +162,13 @@ String configToJson(bool maskSecrets) {
   doc["webUser"] = config.webUser;
   doc["webPass"] = maskedIf(maskSecrets, config.webPass);
   doc["numberBlackList"] = config.numberBlackList;
-  doc["smsOnly"] = config.smsOnly;
   doc["filterWhitelist"] = config.filterWhitelist;
   doc["filterKeywords"] = config.filterKeywords;
-  doc["tzHours"] = config.tzHours;
-  doc["reportEnabled"] = config.reportEnabled;
   doc["wifi1Ssid"] = config.wifi1Ssid;
   doc["wifi1Pass"] = maskedIf(maskSecrets, config.wifi1Pass);
   doc["wifi2Ssid"] = config.wifi2Ssid;
   doc["wifi2Pass"] = maskedIf(maskSecrets, config.wifi2Pass);
+  doc["simPin"] = maskedIf(maskSecrets, config.simPin);
   JsonArray chans = doc["channels"].to<JsonArray>();
   for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
     const PushChannel& c = config.pushChannels[i];
@@ -171,10 +176,11 @@ String configToJson(bool maskSecrets) {
     o["enabled"] = c.enabled;
     o["type"] = (int)c.type;
     o["name"] = c.name;
-    o["url"] = c.url;
+    // Webhook URL 本身通常包含访问令牌，打码导出时必须视为密钥。
+    o["url"] = maskedIf(maskSecrets, c.url);
     o["key1"] = maskedIf(maskSecrets, c.key1);
     o["key2"] = maskedIf(maskSecrets, c.key2);
-    o["customBody"] = c.customBody;
+    o["customBody"] = maskedIf(maskSecrets, c.customBody);
   }
   String out;
   serializeJson(doc, out);
@@ -203,15 +209,8 @@ String configFromJson(const String& json) {
     if (u.length() > 0) tmp.webUser = u;
   }
   if (doc["numberBlackList"].is<const char*>()) tmp.numberBlackList = doc["numberBlackList"].as<String>();
-  if (doc["smsOnly"].is<bool>()) tmp.smsOnly = doc["smsOnly"].as<bool>();
   if (doc["filterWhitelist"].is<bool>()) tmp.filterWhitelist = doc["filterWhitelist"].as<bool>();
   if (doc["filterKeywords"].is<const char*>()) tmp.filterKeywords = doc["filterKeywords"].as<String>();
-  if (doc["tzHours"].is<int>()) {
-    int tz = doc["tzHours"].as<int>();
-    if (tz < -12 || tz > 14) return "tzHours 超出范围（-12~14）";
-    tmp.tzHours = tz;
-  }
-  if (doc["reportEnabled"].is<bool>()) tmp.reportEnabled = doc["reportEnabled"].as<bool>();
   if (doc["wifi1Ssid"].is<const char*>()) tmp.wifi1Ssid = doc["wifi1Ssid"].as<String>();
   if (doc["wifi2Ssid"].is<const char*>()) tmp.wifi2Ssid = doc["wifi2Ssid"].as<String>();
 
@@ -226,6 +225,8 @@ String configFromJson(const String& json) {
   applySecret("webPass", tmp.webPass);
   applySecret("wifi1Pass", tmp.wifi1Pass);
   applySecret("wifi2Pass", tmp.wifi2Pass);
+  applySecret("simPin", tmp.simPin);
+  if (!isSimPinValid(tmp.simPin)) return "simPin 必须为空或4-8位纯数字";
 
   if (doc["channels"].is<JsonArray>()) {
     JsonArray chans = doc["channels"].as<JsonArray>();
@@ -239,8 +240,14 @@ String configFromJson(const String& json) {
         tmp.pushChannels[i].type = (PushType)ty;
       }
       if (o["name"].is<const char*>()) tmp.pushChannels[i].name = o["name"].as<String>();
-      if (o["url"].is<const char*>()) tmp.pushChannels[i].url = o["url"].as<String>();
-      if (o["customBody"].is<const char*>()) tmp.pushChannels[i].customBody = o["customBody"].as<String>();
+      if (o["url"].is<const char*>()) {
+        String v = o["url"].as<String>();
+        if (v != MASK) tmp.pushChannels[i].url = v;
+      }
+      if (o["customBody"].is<const char*>()) {
+        String v = o["customBody"].as<String>();
+        if (v != MASK) tmp.pushChannels[i].customBody = v;
+      }
       if (o["key1"].is<const char*>()) {
         String v = o["key1"].as<String>();
         if (v != MASK) tmp.pushChannels[i].key1 = v;
@@ -266,6 +273,17 @@ void getPrimaryWifi(const char*& ssid, const char*& pass) {
   } else {
     ssid = WIFI_SSID;
     pass = WIFI_PASS;
+  }
+}
+
+// 备用 WiFi 生效凭据：网页配置优先，回退编译宏（未配置宏时返回空串表示无备网）
+void getBackupWifi(const char*& ssid, const char*& pass) {
+  if (config.wifi2Ssid.length() > 0) {
+    ssid = config.wifi2Ssid.c_str();
+    pass = config.wifi2Pass.c_str();
+  } else {
+    ssid = WIFI2_SSID;
+    pass = WIFI2_PASS;
   }
 }
 

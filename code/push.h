@@ -25,7 +25,4 @@ bool pushChannelCooling(int idx);   // 该通道是否处于熔断冷却中
 String pushChannelStatsJson();      // 概览页通道健康数据
 void pushStatsNoteBlocked(int idx); // 短信被熔断跳过时计数
 
-// 把一段文本（如每日健康报告）通过所有有效通道推送 + 发邮件
-void pushBroadcastText(const char* title, const char* text);
-
 #endif

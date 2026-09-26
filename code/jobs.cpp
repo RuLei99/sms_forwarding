@@ -62,7 +62,7 @@ static bool runPingJob(String& message) {
 
   // 等待最多35秒（30秒超时 + 5秒余量）
   while (millis() - start < 35000) {
-    esp_task_wdt_reset();
+    wdtFeed();
     while (Serial1.available()) {
       char c = Serial1.read();
       if (resp.length() < 4096) resp += c;  // 防 String 无限增长
@@ -169,14 +169,15 @@ void jobsRun() {
   memset(&s_result, 0, sizeof(s_result));
   s_result.id = s_job.id;
 
-  // 执行期间持有串口占用权：其他 Web 模组请求（flight/datalock 等）会被拒
+  // 执行期间持有串口占用权：其他 Web 模组请求会被拒
   modemPortBusy = true;
 
   switch (s_job.type) {
     case MODEM_JOB_AT: {
       logCaptureLn(String("执行 AT 任务: " + String(s_job.arg1)));
       String resp = sendATCommand(s_job.arg1, 5000);
-      s_result.success = resp.length() > 0;
+      // 任意噪声字节都不能算 AT 成功；标准 AT 命令必须以 OK 结束且不能含 ERROR。
+      s_result.success = resp.indexOf("OK") >= 0 && resp.indexOf("ERROR") < 0;
       snprintf(s_result.message, sizeof(s_result.message), "%s",
                resp.length() > 0 ? resp.c_str() : "超时或无响应");
       break;

@@ -28,7 +28,7 @@ bool sendEmailNotification(const char* subject, const char* body) {
 
   const int MAX_ATTEMPTS = 3; // 总尝试次数（含首次）
   for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    esp_task_wdt_reset();  // 邮件整体可达数十秒，按尝试粒度喂狗
+    wdtFeed();  // 邮件整体可达数十秒，按尝试粒度喂狗
     if (attempt > 1) {
       delay(1000 * (attempt - 1)); // 退避：第2次前等1秒，第3次前等2秒
       logCaptureF("[邮件] 重试 (%d/%d)...\n", attempt, MAX_ATTEMPTS);
@@ -183,7 +183,9 @@ static void noteChannelResult(int idx, bool ok) {
 
 bool pushChannelCooling(int idx) {
   if (idx < 0 || idx >= MAX_PUSH_CHANNELS) return false;
-  return s_stats[idx].cooldownUntil != 0 && millis() < s_stats[idx].cooldownUntil;
+  // millis() 约 49.7 天回绕；用有符号差值判断，避免回绕前后的熔断永久失效/提前结束。
+  return s_stats[idx].cooldownUntil != 0 &&
+         (int32_t)(s_stats[idx].cooldownUntil - millis()) > 0;
 }
 
 void pushStatsNoteBlocked(int idx) {
@@ -206,16 +208,6 @@ String pushChannelStatsJson() {
   return json;
 }
 
-// 把文本通过所有有效通道推送 + 发邮件（每日健康报告用）
-void pushBroadcastText(const char* title, const char* text) {
-  for (int i = 0; i < MAX_PUSH_CHANNELS; i++) {
-    if (isPushChannelValid(config.pushChannels[i])) {
-      sendToChannel(config.pushChannels[i], "健康报告", text, "", i);
-    }
-  }
-  sendEmailNotification(title, text);
-}
-
 // 判断业务响应体是否表示成功
 // 部分平台无论成败 HTTP 都返回 200，错误信息在响应体中，需要额外校验
 static bool isBodySuccess(const PushChannel& channel, const String& resp) {
@@ -235,7 +227,7 @@ static bool executeChannelRequest(const PushChannel& channel, const String& url,
                                   const String& channelName) {
   const int MAX_ATTEMPTS = 3;
   for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    esp_task_wdt_reset();  // 单通道最多 3 次重试，按尝试粒度喂狗
+    wdtFeed();  // 单通道最多 3 次重试，按尝试粒度喂狗
     if (attempt > 1) {
       delay(500 * (attempt - 1)); // 退避：第2次前等0.5秒，第3次前等1秒
       logCaptureF("[%s] 重试 (%d/%d)...\n", channelName.c_str(), attempt, MAX_ATTEMPTS);
@@ -501,7 +493,7 @@ static bool executeMqttPublish(const PushChannel& ch, const PushChannelArgs& a, 
 
   const int MAX_ATTEMPTS = 2;
   for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    esp_task_wdt_reset();
+    wdtFeed();
     if (attempt > 1) {
       delay(500);
       logCaptureF("[%s] MQTT 重试 (%d/%d)...\n", channelName.c_str(), attempt, MAX_ATTEMPTS);

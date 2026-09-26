@@ -29,9 +29,9 @@
    └── configValid = isConfigValid()                        // 校验
 
 5. 模组初始化 (AT 指令序列，每步失败重试+LED闪烁)
-   ├── sendATandWaitOK("AT", 1000)                          // 握手
+   ├── sendATandWaitOK("AT", 1000)                          // 握手（CPIN 未就绪时等3秒重查，最多4次）
    ├── sendATandWaitOK("AT+CGACT=0,1", 5000)               // 禁数据(省流量)
-   ├── sendATandWaitOK("AT+CNMI=2,2,0,0,0", 1000)          // 短信URC上报
+   ├── sendATandWaitOK("AT+CNMI=2,1,0,0,0", 1000)          // 短信存入存储+上报+CMTI（见「短信接收路径」）
    ├── sendATandWaitOK("AT+CMGF=0", 1000)                   // PDU模式
    └── waitCEREG()                                           // 等网络注册
 
@@ -165,6 +165,7 @@ Namespace: "sms_config"
 ├── webPass     (String, 默认 "admin123")
 ├── wifi1Ssid/wifi1Pass (主 WiFi，空=用 wifi_config.h 宏)
 ├── wifi2Ssid/wifi2Pass (备用 WiFi 热备)
+├── simPin      (String, SIM PIN，空=不解锁，仅开机试一次)
 ├── tzHours     (int, 默认 8)
 ├── reportEnabled (bool, 默认 true)
 ├── numBlkList  (String, 换行分隔)
@@ -201,6 +202,23 @@ ESP32-C3                   4G 模组
   GPIO 5     ──────────── EN 引脚
 ```
 
+初始化时会自动尝试 `115200/9600/19200/38400/57600/230400/460800/921600`
+等常见 UART 波特率，以收到 `AT` 的 `OK` 响应为准；全部失败才恢复 115200
+并进入原有重试流程。
+
+每次初始化都会主动查询 `AT+CPIN?`：未插卡、需 PIN、需 PUK 会分别记录明确日志，
+不会再统一表现为“网络注册超时”。AT 响应最大保留 8KB，串口噪声不会无限消耗堆内存；
+`AT+CEREG?` 按状态字段精确解析，仅状态 1（本地注册）或 5（漫游注册）视为成功。
+
+PIN 解锁失败一次后置 `simPinUnlockFailed` 锁存：health 巡检每 2 分钟重跑的
+`modemInit()` 会直接跳过解锁（防错误 PIN 累计 3 次锁成 PUK），只有在网页
+重新保存 PIN 才清除锁存再试。
+
+后台重初始化带升级机制：连续 2 次 AT 重试失败后，第 3 次自动 EN 断电重启
+模组（`resetModule`）——纯 AT 重试救不回供电/接触问题导致的"失聪"态，
+EN 断电是固件唯一的硬恢复手段。模组就绪后的周期巡检（5 分钟一次 CEREG）
+连续 2 次失败同样会触发 `resetModule`。
+
 ### AT 指令函数对比
 
 | 函数 | 返回类型 | 延时处理 | 适用场景 |
@@ -219,11 +237,16 @@ modemPowerCycle():
   EN=HIGH (6000ms) 模组上电启动
 ```
 
-6000ms 是关键时间，太短模组初始化未完成会导致 AT 无响应。
+EN 低电平保持 1200ms（与原版时序一致）；拉高后等待 6000ms，
+太短会导致模组尚未初始化完成、AT 无响应。
 
 ### sendSMS() 时序图
 
 ```
+
+等待提示符和发送结果都必须持续喂狗、处理 Web 请求，并限制每轮最多读取的
+串口字节数。超时或 `ERROR` 时发送 ESC 退出 CMGS 正文输入态，避免后续 AT
+命令被误当成短信内容。
 ESP32                         模组
   │                            │
   ├─ AT+CMGS=<len>\r\n ──────►│
@@ -341,6 +364,7 @@ checkSerial1URC() 循环:
   ┌─ IDLE 状态 ──────────────────────────────────────┐
   │  逐行读取 Serial1                                 │
   │  检测 "+CMT:" → 转入 WAIT_PDU                    │
+  │  检测 "+CMTI:" → AT+CMGR 读取存储短信 PDU        │
   └──────────────────────────────────────────────────┘
                        │
   ┌─ WAIT_PDU 状态 ──────────────────────────────────┐
@@ -356,6 +380,28 @@ checkSerial1URC() 循环:
   │    └─ 否 → 回 IDLE                               │
   └──────────────────────────────────────────────────┘
 ```
+
+**短信接收路径（稳定性核心设计，按"不信任任何 URC"原则）**：
+ML307R-DC 的 URC 会被模组发射时的串口噪声破坏，实测两种病态——直推时吞掉
+`+CMT:` 头只吐裸 PDU 行、或输出无换行乱码洪水。因此：
+
+1. 初始化用 `AT+CNMI=2,1,0,0,0`（存储模式）：短信**先落模组存储**，
+   URC 坏了也不丢；
+2. `checkSerial1URC()` 对没有 `+CMT:` 头的裸 PDU 行（≥20 字符纯十六进制）
+   直接按短信处理；
+3. 每 10 秒 `AT+CMGL=4` 扫描全部存储索引兜底（不能用只列未读的 `CMGL=0`：
+   `CMGL` 列出即标已读，被诊断命令碰过的积压短信会被永久跳过），复用
+   `CMGR` 读取/PDU 解码/`CMGD` 删除流程；解析连续失败 3 次的索引按毒短信
+   删除（`dropPoisonSms`），防止坏 PDU 被扫描无限重试。
+
+`+CMTI` 正常到达时走 `AT+CMGR=<index>` 即时读取，成功写入 Web 短信记录后
+`AT+CMGD=<index>` 删除模组存储副本，避免 SIM 短信空间写满。
+AT 命令执行期间到达的 `+CMTI`/`+CMT` 会被当作响应噪声读走：
+`sendATCommand()`、`sendATandWaitOK()` 和 `sendSMS()` 返回前会扫描响应文本
+（`smsNoteCmtiFromResponse()`）。存储索引和直推 PDU 分别进入队列，
+`checkSerial1URC()` 在串口空闲时补读或解码，避免并发到达的短信丢失。
+串口噪声洪水触发的行缓冲溢出丢弃已限流打印（每 5 秒最多一条），
+避免刷爆 120 行日志环形缓冲。
 
 ### 黑名单匹配算法
 
